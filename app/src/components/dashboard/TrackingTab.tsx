@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { logisticsApi, cryptoApi } from '@/services/api';
 
-export const TrackingTab = () => {
+export const DeliveryTab = () => {
   const [activeSubTab, setActiveSubTab] = useState<'track' | 'ship' | 'history'>('track');
   const [trackingNumber, setTrackingNumber] = useState('');
   const [trackedPackage, setTrackedPackage] = useState<any>(null);
@@ -126,20 +126,13 @@ export const TrackingTab = () => {
           const res = await logisticsApi.calculateRate({
             pickupLocation: pickupAddress,
             deliveryLocation: deliveryAddress,
-            weight: parseFloat(weight)
+            weight: parseFloat(weight),
+            serviceType,
+            deliveryCategory,
+            deliveryMode
           });
           if (res.data && res.data.success) {
-            const baseRate = res.data.rate;
-            const modifiedRate = { ...baseRate };
-            Object.keys(modifiedRate).forEach(key => {
-              if (key !== 'currency') {
-                let val = parseFloat(modifiedRate[key]);
-                if (deliveryMode === 'interstate') val += 3000;
-                if (deliveryCategory === 'document') val = Math.max(1000, val - 500);
-                modifiedRate[key] = val;
-              }
-            });
-            setCalculatedRate(modifiedRate);
+            setCalculatedRate(res.data.rate);
           }
         } catch (e) {
           console.error(e);
@@ -151,7 +144,7 @@ export const TrackingTab = () => {
     } else {
       setCalculatedRate(null);
     }
-  }, [pickupAddress, deliveryAddress, weight, deliveryCategory, deliveryMode]);
+  }, [pickupAddress, deliveryAddress, weight, serviceType, deliveryCategory, deliveryMode]);
 
   // Create Shipment
   const handleCreateShipment = async (e: React.FormEvent) => {
@@ -259,10 +252,12 @@ export const TrackingTab = () => {
     }
   };
 
+  const selectedRate = calculatedRate?.total ?? calculatedRate?.[serviceType] ?? 0;
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="flex justify-between items-center flex-wrap gap-4">
-        <h1 className="text-2xl font-bold text-[#1a1a1a]">Logistics & Tracking</h1>
+        <h1 className="text-2xl font-bold text-[#1a1a1a]">Logistics & Delivery</h1>
         
         {/* Navigation Tabs */}
         <div className="flex bg-white p-1 rounded-xl border border-[#e2e2e2]/60">
@@ -272,7 +267,7 @@ export const TrackingTab = () => {
               activeSubTab === 'track' ? 'bg-gradient-primary text-white shadow-sm' : 'text-[#666] hover:bg-[#f5f5f5]'
             }`}
           >
-            Track Package
+            Delivery Status
           </button>
           <button
             onClick={() => setActiveSubTab('ship')}
@@ -280,7 +275,7 @@ export const TrackingTab = () => {
               activeSubTab === 'ship' ? 'bg-gradient-primary text-white shadow-sm' : 'text-[#666] hover:bg-[#f5f5f5]'
             }`}
           >
-            Request Shipping
+            Request Delivery
           </button>
           <button
             onClick={() => setActiveSubTab('history')}
@@ -288,7 +283,7 @@ export const TrackingTab = () => {
               activeSubTab === 'history' ? 'bg-gradient-primary text-white shadow-sm' : 'text-[#666] hover:bg-[#f5f5f5]'
             }`}
           >
-            My Shipments
+            My Deliveries
           </button>
         </div>
       </div>
@@ -298,8 +293,8 @@ export const TrackingTab = () => {
         <div className="space-y-6">
           <div className="bg-white rounded-3xl p-6 border border-[#e2e2e2]/60 shadow-sm space-y-4">
             <div>
-              <label className="text-sm font-bold text-[#1a1a1a]">Enter Tracking Number</label>
-              <p className="text-xs text-[#999]">Search shipment by Nadi logistics order reference code</p>
+              <label className="text-sm font-bold text-[#1a1a1a]">Enter Delivery Reference</label>
+              <p className="text-xs text-[#999]">Search delivery by Nadi logistics order reference code</p>
             </div>
             <form onSubmit={handleTrack} className="flex gap-3">
               <div className="relative flex-1">
@@ -318,7 +313,7 @@ export const TrackingTab = () => {
                 disabled={trackingLoading}
                 className="h-14 px-8 rounded-xl bg-gradient-primary text-white font-bold transition-all active:scale-[0.98]"
               >
-                {trackingLoading ? 'Searching...' : 'Track'}
+                {trackingLoading ? 'Searching...' : 'View Delivery'}
               </Button>
             </form>
           </div>
@@ -678,14 +673,14 @@ export const TrackingTab = () => {
                     <div className="flex justify-between items-center">
                       <span className="text-[#666] font-semibold">Total Cost:</span>
                       <span className="font-black text-[#1a1a1a] text-sm">
-                        ₦{parseFloat(calculatedRate[serviceType] || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        ₦{parseFloat(selectedRate || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </span>
                     </div>
                     {paymentMethod === 'crypto' && (
                       <div className="flex justify-between items-center text-[#ea580c] pt-1.5 border-t border-dashed border-[#e2e2e2]">
                         <span className="font-bold">Estimated Crypto Payout:</span>
                         <span className="font-black text-sm">
-                          {(parseFloat(calculatedRate[serviceType] || 0) / cryptoPrices[cryptoCoin]).toFixed(6)} {cryptoCoin.toUpperCase()}
+                          {(parseFloat(selectedRate || 0) / cryptoPrices[cryptoCoin]).toFixed(6)} {cryptoCoin.toUpperCase()}
                         </span>
                       </div>
                     )}
@@ -710,7 +705,7 @@ export const TrackingTab = () => {
         <div className="bg-white rounded-3xl p-6 border border-[#e2e2e2]/60 shadow-sm space-y-4">
           <div className="flex justify-between items-center">
             <div>
-              <h3 className="text-lg font-bold text-[#1a1a1a]">My Shipments Log</h3>
+              <h3 className="text-lg font-bold text-[#1a1a1a]">My Deliveries Log</h3>
               <p className="text-xs text-[#999]">History of logistics requests created by you</p>
             </div>
             <button 
@@ -728,8 +723,8 @@ export const TrackingTab = () => {
           ) : shipments.length === 0 ? (
             <div className="text-center py-10 space-y-2">
               <Package className="w-12 h-12 text-[#ccc] mx-auto" />
-              <p className="text-sm font-semibold text-[#1a1a1a]">No shipments found</p>
-              <p className="text-xs text-[#666] max-w-xs mx-auto">Create a shipping request above to get started.</p>
+              <p className="text-sm font-semibold text-[#1a1a1a]">No deliveries found</p>
+              <p className="text-xs text-[#666] max-w-xs mx-auto">Create a delivery request above to get started.</p>
             </div>
           ) : (
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
@@ -780,3 +775,5 @@ export const TrackingTab = () => {
     </div>
   );
 };
+
+export { DeliveryTab as TrackingTab };

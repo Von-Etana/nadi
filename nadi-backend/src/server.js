@@ -53,12 +53,12 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://js.paystack.co", "https://checkout.flutterwave.com"],
+      scriptSrc: ["'self'", "https://checkout.flutterwave.com"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:", "blob:"],
-      connectSrc: ["'self'", "https://api.paystack.co", "https://api.flutterwave.com"],
-      frameSrc: ["'self'", "https://checkout.paystack.com", "https://checkout.flutterwave.com"],
+      connectSrc: ["'self'", "https://api.flutterwave.com"],
+      frameSrc: ["'self'", "https://checkout.flutterwave.com"],
       objectSrc: ["'none'"],
       upgradeInsecureRequests: [],
     },
@@ -217,7 +217,7 @@ app.get('/api/docs', (req, res) => {
 // ==============================
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.method} ${req.originalUrl} not found`

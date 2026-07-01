@@ -32,7 +32,7 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
   }
 
   // Check admin access if required
-  if (requireAdmin && user && !['admin', 'super_admin'].includes((user as any).role)) {
+  if (requireAdmin && !['admin', 'super_admin'].includes(user?.role || '')) {
     return <Navigate to="/dashboard" replace />;
   }
 

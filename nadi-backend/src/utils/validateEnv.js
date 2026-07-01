@@ -5,22 +5,23 @@ const requiredVars = {
   critical: [
     { key: 'SUPABASE_URL', description: 'Supabase Project URL' },
     { key: 'SUPABASE_SERVICE_ROLE_KEY', description: 'Supabase Service Role Key' },
-    { key: 'SUPABASE_ANON_KEY', description: 'Supabase Anon Key' }
+    { key: 'SUPABASE_ANON_KEY', description: 'Supabase Anon Key' },
+    { key: 'FLUTTERWAVE_SECRET_KEY', description: 'Flutterwave secret key for payments and transfers' },
+    { key: 'FLUTTERWAVE_WEBHOOK_SECRET', description: 'Flutterwave webhook verification hash' }
   ],
   // Important — features will be degraded without these
   important: [
     { key: 'FRONTEND_URL', description: 'Frontend URL for CORS and email links' },
     { key: 'FLUTTERWAVE_PUBLIC_KEY', description: 'Flutterwave public key for payments' },
-    { key: 'FLUTTERWAVE_SECRET_KEY', description: 'Flutterwave secret key for payments' },
-    { key: 'SENDGRID_API_KEY', description: 'SendGrid API key for emails' },
+    { key: 'RESEND_API_KEY', description: 'Resend API key for emails' },
     { key: 'TERMII_API_KEY', description: 'Termii SMS API key for OTPs' },
     { key: 'WHAT3WORDS_API_KEY', description: 'what3words API key for address resolution' },
-    { key: 'RELOADLY_API_KEY', description: 'Reloadly client secret (API Key) for bill payments' }
+    { key: 'RELOADLY_API_KEY', description: 'Reloadly client secret (API Key) for bill payments' },
+    { key: 'QUIDAX_API_KEY', description: 'Quidax API key for crypto features' }
   ],
   // Optional — nice to have
   optional: [
-    { key: 'RELOADLY_CLIENT_ID', description: 'Reloadly client ID for OAuth2 token generation' },
-    { key: 'CLOUDINARY_CLOUD_NAME', description: 'Cloudinary cloud name' }
+    { key: 'RELOADLY_CLIENT_ID', description: 'Reloadly client ID for OAuth2 token generation' }
   ]
 };
 

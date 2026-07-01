@@ -2,3 +2,10 @@
 *.zip
 *.tar.gz
 node_modules/
+.env
+.env.*
+app/.env*
+nadi-backend/.env*
+!.env.example
+!app/.env.example
+!nadi-backend/.env.example

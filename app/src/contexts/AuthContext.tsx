@@ -11,6 +11,7 @@ export interface User {
   lastName: string;
   email: string;
   phone: string;
+  role?: string;
   isEmailVerified: boolean;
   isPhoneVerified: boolean;
   kycStatus: string;
@@ -28,8 +29,8 @@ interface AuthState {
 }
 
 interface AuthContextType extends AuthState {
-  login: (email: string, password: string, twoFactorCode?: string) => Promise<{ requires2FA?: boolean }>;
-  register: (data: RegisterData) => Promise<void>;
+  login: (email: string, password: string, twoFactorCode?: string) => Promise<{ requires2FA?: boolean; authenticated?: boolean }>;
+  register: (data: RegisterData) => Promise<{ authenticated: boolean; message?: string }>;
   logout: () => Promise<void>;
   updateUser: (user: Partial<User>) => void;
 }
@@ -72,18 +73,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session from Supabase Client
   useEffect(() => {
+    const clearAuthState = async () => {
+      await supabase.auth.signOut().catch(() => undefined);
+      httpClient.clearToken();
+      setState({
+        user: null,
+        token: null,
+        isAuthenticated: false,
+        isLoading: false,
+      });
+    };
+
     const restoreSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         
         if (!session) {
-          setState({
-            user: null,
-            token: null,
-            isAuthenticated: false,
-            isLoading: false,
-          });
-          httpClient.clearToken();
+          await clearAuthState();
           return;
         }
 
@@ -96,14 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       } catch (error) {
         console.error('Failed to restore auth session:', error);
-        await supabase.auth.signOut();
-        setState({
-          user: null,
-          token: null,
-          isAuthenticated: false,
-          isLoading: false,
-        });
-        httpClient.clearToken();
+        await clearAuthState();
       }
     };
 
@@ -142,15 +141,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }));
         } catch (err) {
           console.error("Error updating profile on auth state change:", err);
+          await clearAuthState();
         }
       } else {
-        httpClient.clearToken();
-        setState({
-          user: null,
-          token: null,
-          isAuthenticated: false,
-          isLoading: false,
-        });
+        await clearAuthState();
       }
     });
 
@@ -181,15 +175,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (sessionError) {
+        await supabase.auth.signOut().catch(() => undefined);
+        httpClient.clearToken();
         throw new Error(sessionError.message);
       }
+
+      return { authenticated: true };
     }
 
-    return {};
+    return { authenticated: false };
   }, []);
 
   const register = useCallback(async (registerData: RegisterData) => {
-    const response = await httpClient.post<{ token: string; refreshToken: string; user: User }>(
+    const response = await httpClient.post<{ token?: string; refreshToken?: string; user: User; message?: string }>(
       '/auth/register',
       registerData
     );
@@ -205,9 +203,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (sessionError) {
+        await supabase.auth.signOut().catch(() => undefined);
+        httpClient.clearToken();
         throw new Error(sessionError.message);
       }
+
+      return { authenticated: true };
     }
+
+    return {
+      authenticated: false,
+      message: response.data?.message || 'Registration successful. Please login.',
+    };
   }, []);
 
   const logout = useCallback(async () => {

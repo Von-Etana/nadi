@@ -21,7 +21,7 @@ import { useAuth } from '@/contexts/AuthContext';
 // Import modular split components
 import { OverviewTab } from '@/components/dashboard/OverviewTab';
 import { WalletTab } from '@/components/dashboard/WalletTab';
-import { TrackingTab } from '@/components/dashboard/TrackingTab';
+import { DeliveryTab } from '@/components/dashboard/DeliveryTab';
 import { UtilitiesTab } from '@/components/dashboard/UtilitiesTab';
 import { GiftCardsTab } from '@/components/dashboard/GiftCardsTab';
 import { CryptoTab } from '@/components/dashboard/CryptoTab';
@@ -29,7 +29,7 @@ import { FuelTab } from '@/components/dashboard/FuelTab';
 import { HistoryTab } from '@/components/dashboard/HistoryTab';
 import { SettingsTab } from '@/components/dashboard/SettingsTab';
 
-type TabType = 'overview' | 'wallet' | 'tracking' | 'utilities' | 'giftcards' | 'crypto' | 'fuel' | 'history' | 'settings';
+type TabType = 'overview' | 'wallet' | 'delivery' | 'utilities' | 'giftcards' | 'crypto' | 'fuel' | 'history' | 'settings';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -42,7 +42,7 @@ const Dashboard = () => {
   const sidebarItems = [
     { id: 'overview', label: 'Overview', icon: Home },
     { id: 'wallet', label: 'My Wallet', icon: Wallet },
-    { id: 'tracking', label: 'Track Package', icon: Package },
+    { id: 'delivery', label: 'Delivery', icon: Package },
     { id: 'utilities', label: 'Pay Bills', icon: Receipt },
     { id: 'giftcards', label: 'Gift Cards', icon: Gift },
     { id: 'crypto', label: 'Crypto', icon: TrendingUp },
@@ -143,7 +143,13 @@ const Dashboard = () => {
             {/* Right Side Info */}
             <div className="flex items-center gap-4">
               {/* Notifications */}
-              <button className="relative p-2 rounded-xl hover:bg-[#f5f5f5] transition-colors" aria-label="Notifications">
+              <button
+                type="button"
+                onClick={() => setActiveTab('settings')}
+                className="relative p-2 rounded-xl hover:bg-[#f5f5f5] transition-colors"
+                aria-label="Open notification settings"
+                title="Open notification settings"
+              >
                 <Bell className="w-6 h-6 text-[#666]" />
                 {notifications > 0 && (
                   <span className="absolute top-1 right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white animate-pulse">
@@ -182,7 +188,7 @@ const Dashboard = () => {
               setShowBalance={setShowBalance}
             />
           )}
-          {activeTab === 'tracking' && <TrackingTab />}
+          {activeTab === 'delivery' && <DeliveryTab />}
           {activeTab === 'utilities' && <UtilitiesTab />}
           {activeTab === 'giftcards' && <GiftCardsTab />}
           {activeTab === 'crypto' && (

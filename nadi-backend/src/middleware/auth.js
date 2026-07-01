@@ -57,7 +57,6 @@ const auth = async (req, res, next) => {
     // Attach user profile, auth user information, and token to request
     req.user = {
       ...userProfile,
-      // For mongoose compatibility
       _id: userProfile.id,
       id: userProfile.id
     };

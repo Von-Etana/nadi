@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { authApi, notificationsApi } from '@/services/api';
+import { toast } from 'sonner';
 
 interface SettingsTabProps {
   user: any;
@@ -316,7 +317,11 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
           <div className="bg-white rounded-3xl p-6 border border-[#e2e2e2]/60 shadow-sm space-y-3">
             <h3 className="text-base font-bold text-[#1a1a1a] mb-1">Security Standards</h3>
             
-            <button className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[#e2e2e2]/60 hover:border-[#ea580c] transition-all bg-[#fcfcfc] text-left">
+            <button
+              type="button"
+              onClick={() => toast.info('Transaction PIN controls are managed through your wallet security flow.')}
+              className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[#e2e2e2]/60 hover:border-[#ea580c] transition-all bg-[#fcfcfc] text-left"
+            >
               <div className="flex items-center gap-3">
                 <Lock className="w-5 h-5 text-[#ea580c]" />
                 <div>
@@ -327,7 +332,17 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
               <ChevronRight className="w-4 h-4 text-[#999]" />
             </button>
 
-            <button className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[#e2e2e2]/60 hover:border-[#ea580c] transition-all bg-[#fcfcfc] text-left">
+            <button
+              type="button"
+              onClick={() => {
+                if (user?.twoFactorEnabled) {
+                  toast.success('Two-factor authentication is already active.');
+                } else {
+                  toast.info('Two-factor authentication is available during account security setup.');
+                }
+              }}
+              className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[#e2e2e2]/60 hover:border-[#ea580c] transition-all bg-[#fcfcfc] text-left"
+            >
               <div className="flex items-center gap-3">
                 <Shield className="w-5 h-5 text-[#ea580c]" />
                 <div>

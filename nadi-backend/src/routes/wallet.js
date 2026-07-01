@@ -112,7 +112,7 @@ router.get('/transactions', auth, async (req, res) => {
 router.post('/fund', auth, [
   body('amount').isFloat({ min: 100 }).withMessage('Minimum amount is ₦100'),
   body('method').isIn(['card', 'bank_transfer', 'ussd']).withMessage('Invalid payment method'),
-  body('provider').optional().isIn(['paystack', 'flutterwave']).withMessage('Invalid provider')
+  body('provider').optional().equals('flutterwave').withMessage('Flutterwave is the only supported payment provider')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -123,7 +123,7 @@ router.post('/fund', auth, [
       });
     }
 
-    const { amount, method, cardId, provider } = req.body;
+    const { amount, method } = req.body;
     const reference = `FND-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     // Create pending transaction in Supabase
@@ -153,69 +153,20 @@ router.post('/fund', auth, [
       });
     }
 
-    // If using Flutterwave, return details immediately for inline checkout
-    if (provider === 'flutterwave') {
-      return res.json({
-        success: true,
-        message: 'Flutterwave payment initialized',
-        transaction: {
-          id: transaction.id,
-          reference: transaction.reference,
-          amount: transaction.amount
-        },
-        payment: {
-          provider: 'flutterwave',
-          reference: transaction.reference
-        }
-      });
-    }
-
-    // Initialize Paystack payment (default / fallback)
-    const paystackResponse = await axios.post(
-      `${PAYSTACK_BASE_URL}/transaction/initialize`,
-      {
-        email: req.user.email,
-        amount: amount * 100, // kobo
-        reference,
-        callback_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/callback`,
-        metadata: {
-          transactionId: transaction.id,
-          userId: req.user.id,
-          type: 'wallet_funding'
-        },
-        ...(cardId && { authorization_code: cardId })
+    res.json({
+      success: true,
+      message: 'Flutterwave payment initialized',
+      transaction: {
+        id: transaction.id,
+        reference: transaction.reference,
+        amount: transaction.amount
       },
-      {
-        headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET}`,
-          'Content-Type': 'application/json'
-        }
+      payment: {
+        provider: 'flutterwave',
+        txRef: transaction.reference,
+        reference: transaction.reference
       }
-    );
-
-    if (paystackResponse.data.status) {
-      res.json({
-        success: true,
-        message: 'Payment initialized',
-        transaction: {
-          id: transaction.id,
-          reference: transaction.reference,
-          amount: transaction.amount
-        },
-        payment: {
-          authorization_url: paystackResponse.data.data.authorization_url,
-          access_code: paystackResponse.data.data.access_code,
-          reference: paystackResponse.data.data.reference
-        }
-      });
-    } else {
-      // Delete pending transaction if initialization failed
-      await supabase.from('transactions').delete().eq('id', transaction.id);
-      res.status(400).json({
-        success: false,
-        message: 'Payment initialization failed'
-      });
-    }
+    });
   } catch (error) {
     logger.error('Fund wallet error:', error.response?.data || error.message);
     res.status(500).json({
@@ -392,7 +343,7 @@ router.post('/transfer', auth, [
 });
 
 // @route   POST /api/v1/wallet/withdraw
-// @desc    Withdraw money to bank account (Atomic debit, Paystack integration, and safety rollback)
+// @desc    Withdraw money to bank account (Atomic debit, Flutterwave transfer, and safety rollback)
 // @access  Private
 router.post('/withdraw', auth, [
   body('amount').isFloat({ min: 500 }).withMessage('Minimum withdrawal is ₦500'),

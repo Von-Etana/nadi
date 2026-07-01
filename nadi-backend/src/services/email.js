@@ -126,24 +126,20 @@ const sendEmail = async ({ to, subject, template, data, attachments }) => {
       from: process.env.RESEND_FROM_EMAIL || 'info@nadidigital.com',
       to,
       subject: emailContent.subject || subject,
-      html: emailContent.html
+      html: emailContent.html,
+      attachments: attachments ? attachments.map(att => ({
+        content: att.content,
+        filename: att.filename,
+        contentType: att.contentType
+      })) : undefined
     };
 
-    // Resend accepts attachments as an array of { filename, content }
-    if (attachments && attachments.length > 0) {
-      mailOptions.attachments = attachments.map(att => ({
-        filename: att.filename,
-        content: Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content, 'base64')
-      }));
-    }
-
     const { data: result, error } = await resend.emails.send(mailOptions);
-
     if (error) {
-      throw new Error(error.message || 'Resend API returned an error');
+      throw error;
     }
-
-    logger.info(`Email sent via Resend to ${to} (id: ${result.id})`);
+    
+    logger.info(`Email sent via Resend to ${to}`);
     return { success: true, response: result };
   } catch (error) {
     logger.error('Email sending error (Resend):', error);

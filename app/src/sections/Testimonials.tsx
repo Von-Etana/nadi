@@ -2,6 +2,30 @@ import { useEffect, useRef, useState } from 'react';
 import { Quote, ChevronLeft, ChevronRight, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
+const testimonials = [
+  {
+    name: 'Sarah Johnson',
+    role: 'Business Owner, Lagos',
+    avatar: '/avatar-sarah.jpg',
+    quote: 'Nadi Digital Service has completely transformed how I manage my business finances. Paying PHCN bills and buying DSTV subscriptions has never been easier!',
+    rating: 5,
+  },
+  {
+    name: 'Michael Chen',
+    role: 'Crypto Trader, Abuja',
+    avatar: '/avatar-michael.jpg',
+    quote: 'The crypto exchange feature is amazing. I can trade Bitcoin and Ethereum with real-time rates, and withdraw directly to my Nigerian bank account.',
+    rating: 5,
+  },
+  {
+    name: 'Emma Williams',
+    role: 'Restaurant Owner, Port Harcourt',
+    avatar: '/avatar-emma.jpg',
+    quote: 'I use Nadi for everything - paying suppliers, receiving payments, even ordering cooking gas for my restaurant. It is an all-in-one solution!',
+    rating: 5,
+  },
+];
+
 const Testimonials = () => {
   const sectionRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -31,30 +55,6 @@ const Testimonials = () => {
     }, 5000);
     return () => clearInterval(interval);
   }, []);
-
-  const testimonials = [
-    {
-      name: 'Sarah Johnson',
-      role: 'Business Owner, Lagos',
-      avatar: '/avatar-sarah.jpg',
-      quote: 'Nadi Digital Service has completely transformed how I manage my business finances. Paying PHCN bills and buying DSTV subscriptions has never been easier!',
-      rating: 5,
-    },
-    {
-      name: 'Michael Chen',
-      role: 'Crypto Trader, Abuja',
-      avatar: '/avatar-michael.jpg',
-      quote: 'The crypto exchange feature is amazing. I can trade Bitcoin and Ethereum with real-time rates, and withdraw directly to my Nigerian bank account.',
-      rating: 5,
-    },
-    {
-      name: 'Emma Williams',
-      role: 'Restaurant Owner, Port Harcourt',
-      avatar: '/avatar-emma.jpg',
-      quote: 'I use Nadi for everything - paying suppliers, receiving payments, even ordering cooking gas for my restaurant. It is an all-in-one solution!',
-      rating: 5,
-    },
-  ];
 
   const nextTestimonial = () => {
     setActiveIndex((prev) => (prev + 1) % testimonials.length);

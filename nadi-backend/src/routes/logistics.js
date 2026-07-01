@@ -3,11 +3,74 @@ const router = express.Router();
 const { body, validationResult } = require('express-validator');
 
 const supabase = require('../utils/supabase');
-const { auth } = require('../middleware/auth');
+const { auth, authorize } = require('../middleware/auth');
 const what3words = require('../services/what3words');
 const { createNotification } = require('../services/notification');
 const quidaxService = require('../services/quidax');
 const logger = require('../utils/logger');
+
+const DISPATCHABLE_STATUSES = ['accepted', 'picked_up', 'in_transit', 'delivered'];
+const TERMINAL_STATUSES = ['cancelled', 'delivered'];
+const STATUS_FLOW = {
+  pending: ['accepted', 'cancelled'],
+  order_created: ['accepted', 'cancelled'],
+  accepted: ['picked_up', 'in_transit'],
+  picked_up: ['in_transit', 'delivered'],
+  in_transit: ['delivered'],
+  delivered: [],
+  cancelled: []
+};
+
+function sanitizeText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeScheduledDate(scheduledDate) {
+  if (!scheduledDate) return null;
+  const parsed = new Date(scheduledDate);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function buildTrackingLog(status, message, extra = {}) {
+  return {
+    status,
+    timestamp: new Date().toISOString(),
+    message,
+    ...extra
+  };
+}
+
+function appendTrackingEvent(tracking, status, message, extra = {}) {
+  const existingLogs = Array.isArray(tracking?.logs) ? tracking.logs : [];
+  return {
+    ...(tracking || {}),
+    status,
+    logs: [...existingLogs, buildTrackingLog(status, message, extra)]
+  };
+}
+
+function isValidTransition(currentStatus, nextStatus) {
+  const allowed = STATUS_FLOW[currentStatus] || [];
+  return allowed.includes(nextStatus);
+}
+
+function buildShipmentPaymentSummary({
+  paymentMethod,
+  reference,
+  amount,
+  cryptoCoin,
+  cryptoQty
+}) {
+  return {
+    method: paymentMethod,
+    reference,
+    status: 'completed',
+    amount,
+    currency: paymentMethod === 'crypto' ? cryptoCoin.toUpperCase() : 'NGN',
+    cryptoCoin: paymentMethod === 'crypto' ? cryptoCoin : null,
+    cryptoQty: paymentMethod === 'crypto' ? cryptoQty : 0
+  };
+}
 
 // Helper function to resolve addresses (checking for what3words format)
 async function resolveAddress(addressStr) {
@@ -42,11 +105,11 @@ async function resolveAddress(addressStr) {
 // @desc    Create a new shipment & charge wallet (Naira or Crypto)
 // @access  Private
 router.post('/shipments', auth, [
-  body('pickupAddress').notEmpty().withMessage('Pickup address is required'),
-  body('deliveryAddress').notEmpty().withMessage('Delivery address is required'),
-  body('recipientName').notEmpty().withMessage('Recipient name is required'),
-  body('recipientPhone').notEmpty().withMessage('Recipient phone is required'),
-  body('itemDescription').notEmpty().withMessage('Item description is required'),
+  body('pickupAddress').trim().notEmpty().withMessage('Pickup address is required'),
+  body('deliveryAddress').trim().notEmpty().withMessage('Delivery address is required'),
+  body('recipientName').trim().notEmpty().withMessage('Recipient name is required'),
+  body('recipientPhone').trim().notEmpty().withMessage('Recipient phone is required'),
+  body('itemDescription').trim().notEmpty().withMessage('Item description is required'),
   body('weight').isFloat({ min: 0.1 }).withMessage('Weight must be at least 0.1kg'),
   body('serviceType').optional().isIn(['standard', 'express', 'sameDay']).withMessage('Invalid service type'),
   body('paymentMethod').optional().isIn(['wallet', 'crypto']).withMessage('Invalid payment method'),
@@ -74,7 +137,35 @@ router.post('/shipments', auth, [
       scheduledDate = null
     } = req.body;
 
+    const normalizedPickupAddress = sanitizeText(pickupAddress);
+    const normalizedDeliveryAddress = sanitizeText(deliveryAddress);
+    const normalizedRecipientName = sanitizeText(recipientName);
+    const normalizedRecipientPhone = sanitizeText(recipientPhone);
+    const normalizedItemDescription = sanitizeText(itemDescription);
+    const normalizedScheduledDate = normalizeScheduledDate(scheduledDate);
+
+    if (!normalizedPickupAddress || !normalizedDeliveryAddress || !normalizedRecipientName || !normalizedRecipientPhone || !normalizedItemDescription) {
+      return res.status(400).json({
+        success: false,
+        message: 'Shipment details must not be empty'
+      });
+    }
+
+    if (scheduledDate && !normalizedScheduledDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Scheduled delivery date is invalid'
+      });
+    }
+
     const weightNum = parseFloat(weight);
+    if (Number.isNaN(weightNum) || weightNum < 0.1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Weight must be at least 0.1kg'
+      });
+    }
+
     const baseRate = Math.max(1500, weightNum * 500);
     let amount = baseRate;
     if (serviceType === 'express') amount = baseRate * 1.5;
@@ -85,8 +176,8 @@ router.post('/shipments', auth, [
     if (deliveryCategory === 'document') amount = Math.max(1000, amount - 500);
 
     // Resolve what3words addresses
-    const resolvedPickup = await resolveAddress(pickupAddress);
-    const resolvedDelivery = await resolveAddress(deliveryAddress);
+    const resolvedPickup = await resolveAddress(normalizedPickupAddress);
+    const resolvedDelivery = await resolveAddress(normalizedDeliveryAddress);
 
     const reference = `LOG-TX-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
@@ -113,11 +204,11 @@ router.post('/shipments', auth, [
         p_ref: reference,
         p_type: 'logistics_payment',
         p_category: 'logistics',
-        p_description: `Delivery charge paid with ${selectedCoin.toUpperCase()}: ${itemDescription}`,
-        p_metadata: { serviceType, weight, paymentMethod, cryptoCoin: selectedCoin, deliveryCategory, deliveryMode, scheduledDate },
+        p_description: `Delivery charge paid with ${selectedCoin.toUpperCase()}: ${normalizedItemDescription}`,
+        p_metadata: { serviceType, weight, paymentMethod, cryptoCoin: selectedCoin, deliveryCategory, deliveryMode, scheduledDate: normalizedScheduledDate },
         p_details: {
           pickup: resolvedPickup,
-          delivery: { ...resolvedDelivery, recipientName, recipientPhone }
+          delivery: { ...resolvedDelivery, recipientName: normalizedRecipientName, recipientPhone: normalizedRecipientPhone }
         }
       });
       debitResult = dbRes.data;
@@ -130,11 +221,11 @@ router.post('/shipments', auth, [
         p_ref: reference,
         p_type: 'logistics_payment',
         p_category: 'logistics',
-        p_description: `Delivery charge: ${itemDescription}`,
-        p_metadata: { serviceType, weight, paymentMethod, deliveryCategory, deliveryMode, scheduledDate },
+        p_description: `Delivery charge: ${normalizedItemDescription}`,
+        p_metadata: { serviceType, weight, paymentMethod, deliveryCategory, deliveryMode, scheduledDate: normalizedScheduledDate },
         p_details: {
           pickup: resolvedPickup,
-          delivery: { ...resolvedDelivery, recipientName, recipientPhone }
+          delivery: { ...resolvedDelivery, recipientName: normalizedRecipientName, recipientPhone: normalizedRecipientPhone }
         }
       });
       debitResult = dbRes.data;
@@ -165,11 +256,11 @@ router.post('/shipments', auth, [
             address: resolvedDelivery.address,
             coordinates: resolvedDelivery.coordinates,
             isWhat3words: resolvedDelivery.isWhat3words,
-            recipientName,
-            recipientPhone
+            recipientName: normalizedRecipientName,
+            recipientPhone: normalizedRecipientPhone
           },
-          items: [{ description: itemDescription, weight: weightNum, category: deliveryCategory }],
-          package: { weight: weightNum, serviceType, deliveryCategory, deliveryMode, scheduledDate },
+          items: [{ description: normalizedItemDescription, weight: weightNum, category: deliveryCategory }],
+          package: { weight: weightNum, serviceType, deliveryCategory, deliveryMode, scheduledDate: normalizedScheduledDate },
           pricing: { baseAmount: amount, insurance: 0, total: amount, paymentMethod, cryptoCoin: paymentMethod === 'crypto' ? selectedCoin : null, cryptoQty },
           insurance: { optedIn: insuranceOptIn },
           status: 'pending',
@@ -206,7 +297,18 @@ router.post('/shipments', auth, [
       res.status(201).json({
         success: true,
         message: 'Shipment order created successfully',
-        order
+        order: {
+          ...order,
+          reference: order.order_number,
+          initialStatus: 'pending'
+        },
+        payment: buildShipmentPaymentSummary({
+          paymentMethod,
+          reference,
+          amount,
+          cryptoCoin: paymentMethod === 'crypto' ? selectedCoin : null,
+          cryptoQty
+        })
       });
     } catch (dbErr) {
       logger.error('Logistics order insertion failed, initiating refund:', dbErr);
@@ -269,12 +371,18 @@ router.get('/shipments', auth, async (req, res) => {
 router.get('/track/:trackingNumber', auth, async (req, res) => {
   try {
     const { trackingNumber } = req.params;
+    const isOpsUser = ['admin', 'super_admin'].includes(req.user?.role);
 
-    const { data: shipment, error } = await supabase
+    let query = supabase
       .from('logistics_orders')
       .select('*')
-      .eq('order_number', trackingNumber)
-      .maybeSingle();
+      .eq('order_number', trackingNumber);
+
+    if (!isOpsUser) {
+      query = query.eq('user_id', req.user.id);
+    }
+
+    const { data: shipment, error } = await query.maybeSingle();
 
     if (error || !shipment) {
       return res.status(404).json({
@@ -307,22 +415,206 @@ router.post('/calculate-rate', auth, [
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { weight } = req.body;
+    const {
+      weight,
+      serviceType = 'standard',
+      deliveryCategory = 'parcel',
+      deliveryMode = 'door_to_door'
+    } = req.body;
     const weightNum = parseFloat(weight);
     const baseRate = Math.max(1500, weightNum * 500);
+    const standard = Math.max(1500, baseRate + (deliveryMode === 'interstate' ? 3000 : 0) + (deliveryCategory === 'document' ? -500 : 0));
+    const express = Math.max(1500, baseRate * 1.5 + (deliveryMode === 'interstate' ? 3000 : 0) + (deliveryCategory === 'document' ? -500 : 0));
+    const sameDay = Math.max(1500, baseRate * 2.5 + (deliveryMode === 'interstate' ? 3000 : 0) + (deliveryCategory === 'document' ? -500 : 0));
+
+    const serviceRate = serviceType === 'express' ? express : serviceType === 'sameDay' ? sameDay : standard;
 
     res.json({
       success: true,
       rate: {
-        standard: baseRate,
-        express: baseRate * 1.5,
-        sameDay: baseRate * 2.5,
+        standard,
+        express,
+        sameDay,
+        total: serviceRate,
+        serviceType,
+        deliveryCategory,
+        deliveryMode,
         currency: 'NGN'
       }
     });
   } catch (error) {
     logger.error('Calculate rate error:', error);
     res.status(500).json({ success: false, message: 'Failed to calculate rate' });
+  }
+});
+
+// @route   POST /api/v1/logistics/shipments/:id/assign
+// @desc    Assign shipment to dispatcher/admin workflow
+// @access  Admin
+router.post('/shipments/:id/assign', auth, authorize('admin', 'super_admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const assignedTo = sanitizeText(req.body.assignedTo || req.body.assigned_to);
+    const notes = sanitizeText(req.body.notes);
+
+    if (!assignedTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assigned dispatcher is required'
+      });
+    }
+
+    const { data: order, error } = await supabase
+      .from('logistics_orders')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error || !order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Shipment order not found'
+      });
+    }
+
+    if (TERMINAL_STATUSES.includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Shipment cannot be assigned because its status is already: ${order.status}`
+      });
+    }
+
+    const tracking = appendTrackingEvent(
+      order.tracking,
+      'accepted',
+      notes || `Shipment assigned to ${assignedTo}`,
+      {
+        assigned_to: assignedTo,
+        actor: req.user?.role || 'admin'
+      }
+    );
+
+    const updates = {
+      assigned_to: assignedTo,
+      status: 'accepted',
+      tracking,
+      updated_at: new Date().toISOString()
+    };
+
+    await supabase
+      .from('logistics_orders')
+      .update(updates)
+      .eq('id', id);
+
+    const shipment = {
+      ...order,
+      ...updates
+    };
+
+    await createNotification({
+      user_id: order.user_id,
+      type: 'order',
+      title: 'Shipment Assigned',
+      message: `Your shipment order ${order.order_number} has been assigned and is awaiting pickup.`,
+      related_to: { table: 'logistics_orders', id: order.id }
+    }).catch(err => logger.error('Shipment assignment notification error:', err));
+
+    res.json({
+      success: true,
+      message: 'Shipment assigned successfully',
+      shipment
+    });
+  } catch (error) {
+    logger.error('Assign shipment error:', error);
+    res.status(500).json({ success: false, message: 'Failed to assign shipment' });
+  }
+});
+
+// @route   PATCH /api/v1/logistics/shipments/:id/status
+// @desc    Update shipment status, notes and proof
+// @access  Admin
+router.patch('/shipments/:id/status', auth, authorize('admin', 'super_admin'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const nextStatus = sanitizeText(req.body.status);
+    const notes = sanitizeText(req.body.notes);
+    const proof = req.body.proof ?? req.body.deliveryProof ?? null;
+
+    if (!DISPATCHABLE_STATUSES.includes(nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid shipment status'
+      });
+    }
+
+    const { data: order, error } = await supabase
+      .from('logistics_orders')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error || !order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Shipment order not found'
+      });
+    }
+
+    if (!isValidTransition(order.status, nextStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Shipment cannot transition from ${order.status} to ${nextStatus}`
+      });
+    }
+
+    const tracking = appendTrackingEvent(
+      order.tracking,
+      nextStatus,
+      notes || `Shipment status updated to ${nextStatus.replaceAll('_', ' ')}`,
+      {
+        actor: req.user?.role || 'admin',
+        proof: proof || undefined
+      }
+    );
+
+    const updates = {
+      status: nextStatus,
+      tracking,
+      updated_at: new Date().toISOString()
+    };
+
+    if (proof) {
+      updates.delivery_proof = proof;
+    }
+
+    await supabase
+      .from('logistics_orders')
+      .update(updates)
+      .eq('id', id);
+
+    const shipment = {
+      ...order,
+      ...updates
+    };
+
+    if (nextStatus === 'delivered') {
+      await createNotification({
+        user_id: order.user_id,
+        type: 'order',
+        title: 'Shipment Delivered',
+        message: `Your shipment order ${order.order_number} has been delivered.`,
+        related_to: { table: 'logistics_orders', id: order.id }
+      }).catch(err => logger.error('Shipment delivery notification error:', err));
+    }
+
+    res.json({
+      success: true,
+      message: 'Shipment status updated successfully',
+      shipment
+    });
+  } catch (error) {
+    logger.error('Update shipment status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update shipment status' });
   }
 });
 

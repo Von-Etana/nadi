@@ -63,7 +63,7 @@ class HttpClient {
       }
 
       return { data, status: response.status };
-    } catch (error) {
+    } catch {
       return {
         error: 'Network error. Please check your connection.',
         status: 0,
@@ -396,8 +396,14 @@ export const logisticsApi = {
     recipientName: string;
     recipientPhone: string;
     itemDescription: string;
-    itemValue: number;
     weight: number;
+    serviceType?: 'standard' | 'express' | 'sameDay';
+    paymentMethod?: 'wallet' | 'crypto';
+    cryptoCoin?: 'btc' | 'eth' | 'usdt';
+    deliveryCategory?: 'parcel' | 'document' | 'business';
+    deliveryMode?: 'door_to_door' | 'interstate';
+    scheduledDate?: string | null;
+    itemValue?: number;
   }) {
     return httpClient.post('/logistics/shipments', data);
   },
@@ -414,6 +420,9 @@ export const logisticsApi = {
     pickupLocation: string;
     deliveryLocation: string;
     weight: number;
+    serviceType?: 'standard' | 'express' | 'sameDay';
+    deliveryCategory?: 'parcel' | 'document' | 'business';
+    deliveryMode?: 'door_to_door' | 'interstate';
   }) {
     return httpClient.post('/logistics/calculate-rate', data);
   },

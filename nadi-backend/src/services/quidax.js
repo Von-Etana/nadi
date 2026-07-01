@@ -4,9 +4,9 @@ const logger = require('../utils/logger');
 
 class QuidaxService {
   constructor() {
-    this.apiKey = process.env.VITE_QUIDAX_API_KEY;
+    this.apiKey = process.env.QUIDAX_API_KEY;
     if (!this.apiKey) {
-      logger.error('🔴 VITE_QUIDAX_API_KEY is missing from environment variables.');
+      logger.error('🔴 QUIDAX_API_KEY is missing from environment variables.');
     }
     
     this.client = axios.create({

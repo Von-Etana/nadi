@@ -24,6 +24,7 @@ jest.mock('express-validator', () => {
   validator.isLength = jest.fn().mockReturnValue(validator);
   validator.isFloat = jest.fn().mockReturnValue(validator);
   validator.isIn = jest.fn().mockReturnValue(validator);
+  validator.equals = jest.fn().mockReturnValue(validator);
   validator.optional = jest.fn().mockReturnValue(validator);
   validator.trim = jest.fn().mockReturnValue(validator);
   validator.isEmail = jest.fn().mockReturnValue(validator);
@@ -72,6 +73,49 @@ describe('Wallet Router Test Suite', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  // ==========================================
+  // POST /fund tests
+  // ==========================================
+  describe('POST /fund', () => {
+    it('should initialize wallet funding for Flutterwave checkout without external initialization calls', async () => {
+      supabase.from = jest.fn(() => ({
+        insert: jest.fn(() => ({
+          select: jest.fn(() => ({
+            single: jest.fn().mockResolvedValue({
+              data: {
+                id: 'fund-tx-123',
+                reference: 'FND-123456-ABCDEF',
+                amount: 10000
+              },
+              error: null
+            })
+          }))
+        }))
+      }));
+
+      setupMockReqRes({ amount: 10000, method: 'card', provider: 'flutterwave' });
+      const fundHandler = getRouteHandler('/fund', 'post');
+
+      await fundHandler(req, res);
+
+      expect(axios.post).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Flutterwave payment initialized',
+        transaction: {
+          id: 'fund-tx-123',
+          reference: 'FND-123456-ABCDEF',
+          amount: 10000
+        },
+        payment: {
+          provider: 'flutterwave',
+          txRef: 'FND-123456-ABCDEF',
+          reference: 'FND-123456-ABCDEF'
+        }
+      });
+    });
   });
 
   // ==========================================

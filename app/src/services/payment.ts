@@ -7,96 +7,40 @@
  */
 
 // ==========================================
-// Paystack Frontend Service (Public Key Only)
+// Flutterwave Frontend Service (Public Key Only)
 // ==========================================
-export class PaystackService {
-  private publicKey: string;
+type FlutterwaveResponse = {
+  status?: string;
+  tx_ref?: string;
+  transaction_id?: string | number;
+};
 
-  constructor() {
-    this.publicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || '';
-  }
-
-  /**
-   * Load Paystack inline popup script
-   */
-  async loadScript(): Promise<void> {
-    if (document.getElementById('paystack-script')) return;
-
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.id = 'paystack-script';
-      script.src = 'https://js.paystack.co/v1/inline.js';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load Paystack script'));
-      document.head.appendChild(script);
-    });
-  }
-
-  /**
-   * Open Paystack inline payment popup
-   * The backend initializes the transaction and returns the access_code.
-   */
-  async payWithPopup(config: {
-    accessCode: string;
+type FlutterwaveCheckoutConfig = {
+  public_key: string;
+  tx_ref: string;
+  amount: number;
+  currency: string;
+  payment_options: string;
+  customer: {
     email: string;
-    amount: number;
-    onSuccess: (response: any) => void;
-    onClose: () => void;
-  }): Promise<void> {
-    await this.loadScript();
+    name: string;
+    phone_number: string;
+  };
+  customizations: {
+    title: string;
+    description: string;
+    logo: string;
+  };
+  callback: (response: FlutterwaveResponse) => void;
+  onclose: () => void;
+};
 
-    const PaystackPop = (window as any).PaystackPop;
-    if (!PaystackPop) {
-      throw new Error('Paystack script not loaded');
-    }
-
-    const handler = PaystackPop.setup({
-      key: this.publicKey,
-      email: config.email,
-      amount: config.amount * 100, // Convert to kobo
-      access_code: config.accessCode,
-      callback: config.onSuccess,
-      onClose: config.onClose,
-    });
-
-    handler.openIframe();
-  }
-
-  /**
-   * Open Paystack inline payment with direct key (for simple payments)
-   */
-  async payInline(config: {
-    email: string;
-    amount: number;
-    reference: string;
-    metadata?: Record<string, any>;
-    onSuccess: (response: any) => void;
-    onClose: () => void;
-  }): Promise<void> {
-    await this.loadScript();
-
-    const PaystackPop = (window as any).PaystackPop;
-    if (!PaystackPop) {
-      throw new Error('Paystack script not loaded');
-    }
-
-    const handler = PaystackPop.setup({
-      key: this.publicKey,
-      email: config.email,
-      amount: config.amount * 100,
-      ref: config.reference,
-      metadata: config.metadata || {},
-      callback: config.onSuccess,
-      onClose: config.onClose,
-    });
-
-    handler.openIframe();
+declare global {
+  interface Window {
+    FlutterwaveCheckout?: (config: FlutterwaveCheckoutConfig) => void;
   }
 }
 
-// ==========================================
-// Flutterwave Frontend Service (Public Key Only)
-// ==========================================
 export class FlutterwaveService {
   private publicKey: string;
 
@@ -129,12 +73,12 @@ export class FlutterwaveService {
     email: string;
     name: string;
     phone?: string;
-    onSuccess: (response: any) => void;
+    onSuccess: (response: FlutterwaveResponse) => void;
     onClose: () => void;
   }): Promise<void> {
     await this.loadScript();
 
-    const FlutterwaveCheckout = (window as any).FlutterwaveCheckout;
+    const FlutterwaveCheckout = window.FlutterwaveCheckout;
     if (!FlutterwaveCheckout) {
       throw new Error('Flutterwave script not loaded');
     }
@@ -165,7 +109,6 @@ export class FlutterwaveService {
 // Payment Helper
 // ==========================================
 export const paymentService = {
-  paystack: new PaystackService(),
   flutterwave: new FlutterwaveService(),
 
   /**

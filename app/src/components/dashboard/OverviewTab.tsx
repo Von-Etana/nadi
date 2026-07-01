@@ -16,7 +16,7 @@ import {
 import { walletApi } from '@/services/api';
 import { paymentService } from '@/services/payment';
 
-type TabType = 'overview' | 'wallet' | 'tracking' | 'utilities' | 'giftcards' | 'crypto' | 'fuel' | 'history' | 'settings';
+type TabType = 'overview' | 'wallet' | 'delivery' | 'utilities' | 'giftcards' | 'crypto' | 'fuel' | 'history' | 'settings';
 
 interface OverviewTabProps {
   showBalance: boolean;

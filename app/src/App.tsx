@@ -6,6 +6,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 // Pages
 import LandingPage from '@/pages/LandingPage';
 import Login from '@/pages/Login';
+import ForgotPassword from '@/pages/ForgotPassword';
 import Register from '@/pages/Register';
 import Dashboard from '@/pages/Dashboard';
 import AdminDashboard from '@/pages/AdminDashboard';
@@ -19,6 +20,7 @@ function App() {
             {/* Public Routes */}
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/register" element={<Register />} />
 
             {/* Protected Routes */}
