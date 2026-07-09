@@ -10,11 +10,19 @@ const { auth } = require('../middleware/auth');
 const { sendEmail } = require('../services/email');
 const logger = require('../utils/logger');
 
-// Global anon client for user-specific operations (e.g. updating passwords via session headers)
+// Anon-key client: MUST be used for all user-facing auth operations
+// (signInWithPassword, updateUser, etc.) so Supabase enforces credential
+// validation through the standard Auth API instead of the admin bypass.
 const { createClient } = require('@supabase/supabase-js');
 const anonSupabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_ANON_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
 );
 
 // @route   POST /api/v1/auth/register
@@ -107,8 +115,8 @@ router.post('/register', [
       }
     }
 
-    // Sign in user using client credentials to get token
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+    // Sign in user using anon client to get token (NOT service-role — must validate credentials)
+    const { data: signInData, error: signInError } = await anonSupabase.auth.signInWithPassword({
       email,
       password
     });
@@ -194,8 +202,8 @@ router.post('/login', [
       });
     }
 
-    // Authenticate with Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    // Authenticate with Supabase Auth via anon client (NOT service-role — must validate credentials)
+    const { data: authData, error: authError } = await anonSupabase.auth.signInWithPassword({
       email,
       password
     });
@@ -431,8 +439,8 @@ router.post('/change-password', auth, [
 
     const { currentPassword, newPassword } = req.body;
 
-    // Verify current password by logging in again (Supabase password verification workaround)
-    const { error: verifyError } = await supabase.auth.signInWithPassword({
+    // Verify current password by logging in again via anon client (NOT service-role)
+    const { error: verifyError } = await anonSupabase.auth.signInWithPassword({
       email: req.user.email,
       password: currentPassword
     });

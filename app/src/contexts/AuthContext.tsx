@@ -86,8 +86,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const restoreSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        // Use getUser() for SERVER-SIDE validation, NOT getSession() which
+        // only reads from localStorage cache and can return stale/invalid sessions.
+        const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
         
+        if (authError || !authUser) {
+          await clearAuthState();
+          return;
+        }
+
+        // We have a valid authenticated user — now get the session for the access token
+        const { data: { session } } = await supabase.auth.getSession();
         if (!session) {
           await clearAuthState();
           return;
@@ -109,38 +118,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     restoreSession();
 
     // Listen to Auth State changes (including token auto-refreshes)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session) {
+        // IMPORTANT: Do NOT set isAuthenticated until profile is successfully fetched.
+        // Only update the token in state; the profile fetch below determines auth status.
         httpClient.setToken(session.access_token);
-        
-        // Update state token
-        setState(prev => {
-          // If we already have the correct user and same token, do nothing to prevent infinite loops
-          if (prev.token === session.access_token && prev.user) {
-            return prev;
-          }
-          
-          // If token refreshed, try fetching profile if not loaded, otherwise just update token
-          return {
-            ...prev,
-            token: session.access_token,
-            isAuthenticated: true,
-            isLoading: false,
-          };
-        });
 
-        // Trigger a profile fetch in the background to ensure data stays in sync
+        // Validate the session server-side before trusting it
+        const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+        if (authError || !authUser) {
+          console.warn('Auth state change with invalid user, clearing state');
+          await clearAuthState();
+          return;
+        }
+        
+        // Fetch profile to ensure the user exists in our database
         try {
           const userProfile = await fetchProfile(session.access_token);
-          setState(prev => ({
-            ...prev,
+          setState({
             user: userProfile,
             token: session.access_token,
             isAuthenticated: true,
             isLoading: false,
-          }));
+          });
         } catch (err) {
-          console.error("Error updating profile on auth state change:", err);
+          console.error('Error updating profile on auth state change:', err);
           await clearAuthState();
         }
       } else {
