@@ -156,6 +156,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchProfile]);
 
   const login = useCallback(async (email: string, password: string, twoFactorCode?: string) => {
+    // CRITICAL: Clear any existing session before attempting login.
+    // This prevents a stale cached session from interfering with the new login attempt.
+    await supabase.auth.signOut().catch(() => undefined);
+    httpClient.clearToken();
+
     const response = await httpClient.post<{ requires2FA?: boolean; token: string; refreshToken: string; user: User }>(
       '/auth/login',
       { email, password, twoFactorCode }

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { Eye, EyeOff, Mail, Lock, ArrowLeft, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -15,6 +16,8 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [requires2FA, setRequires2FA] = useState(false);
+  // Track whether the user explicitly logged in during THIS page visit
+  const didLoginRef = useRef(false);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -23,8 +26,15 @@ const Login = () => {
 
   const fromPath = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/dashboard';
 
+  // On mount: clear any stale cached session so the user must log in fresh.
+  // This prevents auto-redirect from a previous session sitting in localStorage.
   useEffect(() => {
-    if (isAuthenticated && !requires2FA) {
+    supabase.auth.signOut().catch(() => undefined);
+  }, []);
+
+  // Only redirect to dashboard if the user explicitly logged in on this page
+  useEffect(() => {
+    if (isAuthenticated && didLoginRef.current && !requires2FA) {
       navigate(fromPath, { replace: true });
     }
   }, [isAuthenticated, requires2FA, navigate, fromPath]);
@@ -46,6 +56,8 @@ const Login = () => {
         setIsLoading(false);
         return;
       }
+      // Mark that this page performed a successful login
+      didLoginRef.current = true;
       setRequires2FA(false);
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check your credentials.');
