@@ -167,8 +167,18 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/webhooks', webhookRoutes);
 
 // ==============================
-// Health Check
+// Root Endpoint / Health Check
 // ==============================
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Nadi Digital Service Backend API is running successfully.',
+    timestamp: new Date().toISOString(),
+    health: '/health',
+    docs: '/api/docs'
+  });
+});
+
 app.get('/health', async (req, res) => {
   let dbStatus = 'disconnected';
   try {
