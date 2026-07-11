@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 const Navigation = () => {
   const navigate = useNavigate();
   const { isAuthenticated, user, logout } = useAuth();
+  const hasVerifiedUser = isAuthenticated && !!user;
   
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -79,7 +80,7 @@ const Navigation = () => {
 
           {/* Auth Buttons */}
           <div className="hidden md:flex items-center gap-4">
-            {isAuthenticated ? (
+            {hasVerifiedUser ? (
               <div className="flex items-center gap-4">
                 <button
                   onClick={() => navigate('/dashboard')}
@@ -150,7 +151,7 @@ const Navigation = () => {
               </a>
             ))}
             
-            {isAuthenticated ? (
+            {hasVerifiedUser ? (
               <>
                 <button
                   onClick={() => {

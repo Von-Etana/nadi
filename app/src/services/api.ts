@@ -34,16 +34,25 @@ class HttpClient {
     options: RequestInit = {}
   ): Promise<{ data?: T; error?: string; status: number }> {
     const url = `${this.baseUrl}${endpoint}`;
+    const publicAuthEndpoints = [
+      '/auth/login',
+      '/auth/register',
+      '/auth/forgot-password',
+      '/auth/reset-password',
+    ];
+    const shouldAttachToken = !publicAuthEndpoints.includes(endpoint);
     
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...((options.headers as Record<string, string>) || {}),
     };
 
-    const sessionRes = await supabase.auth.getSession();
-    const token = sessionRes.data?.session?.access_token || this.getToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (shouldAttachToken) {
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data?.session?.access_token || this.getToken();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
     }
 
     try {
@@ -133,16 +142,8 @@ export const authApi = {
     return httpClient.post('/auth/forgot-password', { email });
   },
 
-  async resetPassword(token: string, password: string) {
-    return httpClient.post('/auth/reset-password', { token, password });
-  },
-
-  async verifyEmail(token: string) {
-    return httpClient.get(`/auth/verify-email?token=${token}`);
-  },
-
-  async resendVerification(email: string) {
-    return httpClient.post('/auth/resend-verification', { email });
+  async resetPassword(token: string, password: string, refreshToken?: string) {
+    return httpClient.post('/auth/reset-password', { token, password, refreshToken });
   },
 
   async getProfile() {
@@ -163,6 +164,10 @@ export const authApi = {
 
   async verify2FA(code: string) {
     return httpClient.post('/auth/2fa/verify', { code });
+  },
+
+  async disable2FA(code: string) {
+    return httpClient.post('/auth/2fa/disable', { code });
   },
 };
 

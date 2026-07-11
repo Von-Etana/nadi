@@ -6,18 +6,21 @@ import {
   ChevronRight, 
   Check, 
   AlertCircle, 
-  RefreshCw
+  RefreshCw,
+  X
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { authApi, notificationsApi } from '@/services/api';
 import { toast } from 'sonner';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface SettingsTabProps {
   user: any;
 }
 
 export const SettingsTab = ({ user }: SettingsTabProps) => {
+  const { updateUser } = useAuth();
   // Profile settings
   const [firstName, setFirstName] = useState(user?.firstName || '');
   const [lastName, setLastName] = useState(user?.lastName || '');
@@ -34,6 +37,15 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  // Two-factor authentication state
+  const [twoFactorMode, setTwoFactorMode] = useState<'idle' | 'setup' | 'disable'>('idle');
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorSecret, setTwoFactorSecret] = useState('');
+  const [twoFactorQrCode, setTwoFactorQrCode] = useState('');
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
+  const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
 
   // Notification Preferences
   const [preferences, setPreferences] = useState({
@@ -106,8 +118,14 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
       setPasswordError('New passwords do not match');
       return;
     }
-    if (newPassword.length < 6) {
-      setPasswordError('Password must be at least 6 characters');
+    if (
+      newPassword.length < 8
+      || !/[A-Z]/.test(newPassword)
+      || !/[a-z]/.test(newPassword)
+      || !/[0-9]/.test(newPassword)
+      || !/[!@#$%^&*(),.?":{}|<>]/.test(newPassword)
+    ) {
+      setPasswordError('Password must include uppercase, lowercase, number, special character, and at least 8 characters');
       return;
     }
 
@@ -148,6 +166,91 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
       await notificationsApi.updatePreferences(updated);
     } catch (err) {
       console.error('Failed to sync notification updates:', err);
+    }
+  };
+
+  const resetTwoFactorPanel = () => {
+    setTwoFactorMode('idle');
+    setTwoFactorCode('');
+    setTwoFactorSecret('');
+    setTwoFactorQrCode('');
+    setTwoFactorError(null);
+  };
+
+  const handleStart2FASetup = async () => {
+    try {
+      setTwoFactorLoading(true);
+      setTwoFactorError(null);
+      setBackupCodes([]);
+      const res = await authApi.setup2FA();
+
+      if (res.error || !res.data?.success) {
+        setTwoFactorError(res.error || 'Failed to start two-factor setup.');
+        return;
+      }
+
+      setTwoFactorSecret(res.data.secret || '');
+      setTwoFactorQrCode(res.data.qrCode || '');
+      setTwoFactorCode('');
+      setTwoFactorMode('setup');
+    } catch (err) {
+      setTwoFactorError(err instanceof Error ? err.message : 'Failed to start two-factor setup.');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const handleVerify2FA = async () => {
+    if (!twoFactorCode.trim()) {
+      setTwoFactorError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+
+    try {
+      setTwoFactorLoading(true);
+      setTwoFactorError(null);
+      const res = await authApi.verify2FA(twoFactorCode.trim());
+
+      if (res.error || !res.data?.success) {
+        setTwoFactorError(res.error || 'Invalid verification code.');
+        return;
+      }
+
+      setBackupCodes(Array.isArray(res.data.backupCodes) ? res.data.backupCodes : []);
+      updateUser({ twoFactorEnabled: true });
+      resetTwoFactorPanel();
+      toast.success('Two-factor authentication enabled.');
+    } catch (err) {
+      setTwoFactorError(err instanceof Error ? err.message : 'Failed to enable two-factor authentication.');
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const handleDisable2FA = async () => {
+    if (!twoFactorCode.trim()) {
+      setTwoFactorError('Enter your authenticator code to disable 2FA.');
+      return;
+    }
+
+    try {
+      setTwoFactorLoading(true);
+      setTwoFactorError(null);
+      const res = await authApi.disable2FA(twoFactorCode.trim());
+
+      if (res.error || !res.data?.success) {
+        setTwoFactorError(res.error || 'Invalid verification code.');
+        return;
+      }
+
+      setBackupCodes([]);
+      updateUser({ twoFactorEnabled: false });
+      resetTwoFactorPanel();
+      toast.success('Two-factor authentication disabled.');
+    } catch (err) {
+      setTwoFactorError(err instanceof Error ? err.message : 'Failed to disable two-factor authentication.');
+    } finally {
+      setTwoFactorLoading(false);
     }
   };
 
@@ -336,11 +439,15 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
               type="button"
               onClick={() => {
                 if (user?.twoFactorEnabled) {
-                  toast.success('Two-factor authentication is already active.');
+                  setBackupCodes([]);
+                  setTwoFactorCode('');
+                  setTwoFactorError(null);
+                  setTwoFactorMode(twoFactorMode === 'disable' ? 'idle' : 'disable');
                 } else {
-                  toast.info('Two-factor authentication is available during account security setup.');
+                  handleStart2FASetup();
                 }
               }}
+              disabled={twoFactorLoading}
               className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[#e2e2e2]/60 hover:border-[#ea580c] transition-all bg-[#fcfcfc] text-left"
             >
               <div className="flex items-center gap-3">
@@ -350,8 +457,125 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
                   <span className="text-[10px] text-[#999]">Adds extra protection on logins</span>
                 </div>
               </div>
-              <span className="px-2.5 py-0.5 bg-green-50 border border-green-200 text-green-600 text-[10px] font-bold rounded-full">Active</span>
+              <span className={`px-2.5 py-0.5 border text-[10px] font-bold rounded-full ${
+                user?.twoFactorEnabled
+                  ? 'bg-green-50 border-green-200 text-green-600'
+                  : 'bg-slate-50 border-slate-200 text-slate-500'
+              }`}>
+                {user?.twoFactorEnabled ? 'Active' : 'Off'}
+              </span>
             </button>
+
+            {twoFactorError && (
+              <div className="bg-red-50 border border-red-200 text-red-600 text-xs p-3.5 rounded-xl flex gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                <p>{twoFactorError}</p>
+              </div>
+            )}
+
+            {twoFactorMode === 'setup' && (
+              <div className="rounded-2xl border border-[#e2e2e2]/70 bg-[#fcfcfc] p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-[#1a1a1a]">Set up authenticator app</p>
+                    <p className="text-xs text-[#666] mt-1">Scan the QR code, then enter the 6-digit code.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={resetTwoFactorPanel}
+                    className="p-1 rounded-lg hover:bg-[#eeeeee] text-[#999]"
+                    aria-label="Close 2FA setup"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {twoFactorQrCode && (
+                  <div className="flex justify-center">
+                    <img src={twoFactorQrCode} alt="Two-factor authentication QR code" className="w-40 h-40 rounded-xl border border-[#e2e2e2] bg-white p-2" />
+                  </div>
+                )}
+
+                {twoFactorSecret && (
+                  <div className="rounded-xl bg-white border border-[#e2e2e2] p-3">
+                    <p className="text-[10px] uppercase font-bold text-[#999]">Manual key</p>
+                    <p className="text-xs font-mono text-[#1a1a1a] break-all mt-1">{twoFactorSecret}</p>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <Input
+                    value={twoFactorCode}
+                    onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="123456"
+                    className="h-11 rounded-xl text-center tracking-[0.4em] font-mono"
+                    maxLength={6}
+                    disabled={twoFactorLoading}
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleVerify2FA}
+                    disabled={twoFactorLoading}
+                    className="h-11 rounded-xl bg-gradient-primary text-white"
+                  >
+                    Verify
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {twoFactorMode === 'disable' && (
+              <div className="rounded-2xl border border-[#e2e2e2]/70 bg-[#fcfcfc] p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-[#1a1a1a]">Disable two-factor authentication</p>
+                    <p className="text-xs text-[#666] mt-1">Enter a current authenticator code to confirm.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={resetTwoFactorPanel}
+                    className="p-1 rounded-lg hover:bg-[#eeeeee] text-[#999]"
+                    aria-label="Close 2FA disable"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    value={twoFactorCode}
+                    onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="123456"
+                    className="h-11 rounded-xl text-center tracking-[0.4em] font-mono"
+                    maxLength={6}
+                    disabled={twoFactorLoading}
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleDisable2FA}
+                    disabled={twoFactorLoading}
+                    className="h-11 rounded-xl bg-red-600 hover:bg-red-700 text-white"
+                  >
+                    Disable
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {backupCodes.length > 0 && (
+              <div className="rounded-2xl border border-green-200 bg-green-50 p-4 space-y-3">
+                <div>
+                  <p className="text-sm font-bold text-green-800">Save your backup codes</p>
+                  <p className="text-xs text-green-700 mt-1">Each code can be used once if your authenticator app is unavailable.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {backupCodes.map((code) => (
+                    <span key={code} className="rounded-lg bg-white border border-green-200 p-2 text-center text-xs font-mono text-green-800">
+                      {code}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Notifications Preferences */}

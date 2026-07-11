@@ -8,6 +8,7 @@ import LandingPage from '@/pages/LandingPage';
 import Login from '@/pages/Login';
 import AdminLogin from '@/pages/AdminLogin';
 import ForgotPassword from '@/pages/ForgotPassword';
+import ResetPassword from '@/pages/ResetPassword';
 import Register from '@/pages/Register';
 import Dashboard from '@/pages/Dashboard';
 import AdminDashboard from '@/pages/AdminDashboard';
@@ -23,6 +24,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/admin/login" element={<AdminLogin />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/register" element={<Register />} />
 
             {/* Protected Routes */}

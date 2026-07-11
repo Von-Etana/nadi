@@ -32,6 +32,7 @@ interface AuthContextType extends AuthState {
   login: (email: string, password: string, twoFactorCode?: string) => Promise<{ requires2FA?: boolean; authenticated?: boolean }>;
   register: (data: RegisterData) => Promise<{ authenticated: boolean; message?: string }>;
   logout: () => Promise<void>;
+  resetAuth: () => Promise<void>;
   updateUser: (user: Partial<User>) => void;
 }
 
@@ -49,6 +50,15 @@ interface RegisterData {
 // ==========================================
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const clearCachedAuthStorage = () => {
+  if (typeof localStorage === 'undefined') return;
+
+  localStorage.removeItem('nadi_token');
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith('sb-') && key.includes('-auth-token'))
+    .forEach((key) => localStorage.removeItem(key));
+};
+
 // ==========================================
 // Provider
 // ==========================================
@@ -59,6 +69,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: false,
     isLoading: true,
   });
+
+  const clearAuthState = useCallback(async () => {
+    await supabase.auth.signOut().catch(() => undefined);
+    clearCachedAuthStorage();
+    httpClient.clearToken();
+    setState({
+      user: null,
+      token: null,
+      isAuthenticated: false,
+      isLoading: false,
+    });
+  }, []);
 
   // Helper to fetch user profile via API using the given token
   const fetchProfile = useCallback(async (token: string): Promise<User> => {
@@ -73,17 +95,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session from Supabase Client
   useEffect(() => {
-    const clearAuthState = async () => {
-      await supabase.auth.signOut().catch(() => undefined);
-      httpClient.clearToken();
-      setState({
-        user: null,
-        token: null,
-        isAuthenticated: false,
-        isLoading: false,
-      });
-    };
-
     const restoreSession = async () => {
       try {
         // Use getUser() for SERVER-SIDE validation, NOT getSession() which
@@ -118,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     restoreSession();
 
     // Listen to Auth State changes (including token auto-refreshes)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session) {
         // IMPORTANT: Do NOT set isAuthenticated until profile is successfully fetched.
         // Only update the token in state; the profile fetch below determines auth status.
@@ -153,13 +164,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [fetchProfile]);
+  }, [fetchProfile, clearAuthState]);
 
   const login = useCallback(async (email: string, password: string, twoFactorCode?: string) => {
     // CRITICAL: Clear any existing session before attempting login.
     // This prevents a stale cached session from interfering with the new login attempt.
-    await supabase.auth.signOut().catch(() => undefined);
-    httpClient.clearToken();
+    await clearAuthState();
 
     const response = await httpClient.post<{ requires2FA?: boolean; token: string; refreshToken: string; user: User }>(
       '/auth/login',
@@ -167,14 +177,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     if (response.error) {
+      await clearAuthState();
       throw new Error(response.error);
     }
 
     if (response.data?.requires2FA) {
+      await clearAuthState();
       return { requires2FA: true };
     }
 
-    if (response.data?.token) {
+    if (response.data?.token && response.data?.refreshToken) {
       // Set the session in Supabase client to sync session state
       const { error: sessionError } = await supabase.auth.setSession({
         access_token: response.data.token,
@@ -182,16 +194,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (sessionError) {
-        await supabase.auth.signOut().catch(() => undefined);
-        httpClient.clearToken();
+        await clearAuthState();
         throw new Error(sessionError.message);
       }
 
       return { authenticated: true };
     }
 
-    return { authenticated: false };
-  }, []);
+    await clearAuthState();
+    throw new Error('Login failed. Please check your credentials.');
+  }, [clearAuthState]);
 
   const register = useCallback(async (registerData: RegisterData) => {
     const response = await httpClient.post<{ token?: string; refreshToken?: string; user: User; message?: string }>(
@@ -210,8 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (sessionError) {
-        await supabase.auth.signOut().catch(() => undefined);
-        httpClient.clearToken();
+        await clearAuthState();
         throw new Error(sessionError.message);
       }
 
@@ -222,7 +233,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authenticated: false,
       message: response.data?.message || 'Registration successful. Please login.',
     };
-  }, []);
+  }, [clearAuthState]);
 
   const logout = useCallback(async () => {
     try {
@@ -230,16 +241,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignore backend errors
     } finally {
-      await supabase.auth.signOut();
-      httpClient.clearToken();
-      setState({
-        user: null,
-        token: null,
-        isAuthenticated: false,
-        isLoading: false,
-      });
+      await clearAuthState();
     }
-  }, []);
+  }, [clearAuthState]);
 
   const updateUser = useCallback((updates: Partial<User>) => {
     setState(prev => ({
@@ -249,7 +253,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ ...state, login, register, logout, updateUser }}>
+    <AuthContext.Provider value={{ ...state, login, register, logout, resetAuth: clearAuthState, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

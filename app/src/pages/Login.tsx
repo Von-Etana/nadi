@@ -5,12 +5,11 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/lib/supabase';
 
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, isAuthenticated } = useAuth();
+  const { login, resetAuth, isAuthenticated } = useAuth();
 
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,8 +28,9 @@ const Login = () => {
   // On mount: clear any stale cached session so the user must log in fresh.
   // This prevents auto-redirect from a previous session sitting in localStorage.
   useEffect(() => {
-    supabase.auth.signOut().catch(() => undefined);
-  }, []);
+    didLoginRef.current = false;
+    resetAuth().catch(() => undefined);
+  }, [resetAuth]);
 
   // Only redirect to dashboard if the user explicitly logged in on this page
   useEffect(() => {
@@ -56,9 +56,15 @@ const Login = () => {
         setIsLoading(false);
         return;
       }
-      // Mark that this page performed a successful login
-      didLoginRef.current = true;
-      setRequires2FA(false);
+
+      if (result.authenticated === true) {
+        // Mark that this page performed a successful login
+        didLoginRef.current = true;
+        setRequires2FA(false);
+        return;
+      }
+
+      throw new Error('Login failed. Please check your credentials.');
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check your credentials.');
     } finally {
@@ -166,17 +172,17 @@ const Login = () => {
                     <Shield className="w-8 h-8 text-[#ea580c]" />
                   </div>
                   <h3 className="text-lg font-semibold text-[#1a1a1a]">Two-Factor Authentication</h3>
-                  <p className="text-sm text-[#666] mt-1">Enter the 6-digit code from your authenticator app</p>
+                  <p className="text-sm text-[#666] mt-1">Enter your authenticator code or a backup code</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-[#1a1a1a]">Verification Code</label>
                   <Input
                     type="text"
-                    placeholder="Enter 6-digit code"
+                    placeholder="Enter code"
                     value={formData.twoFactorCode}
-                    onChange={(e) => setFormData({...formData, twoFactorCode: e.target.value.replace(/\D/g, '').slice(0, 6)})}
-                    className="h-14 rounded-xl border-[#e2e2e2] text-center text-2xl tracking-[0.5em] font-mono"
-                    maxLength={6}
+                    onChange={(e) => setFormData({...formData, twoFactorCode: e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12)})}
+                    className="h-14 rounded-xl border-[#e2e2e2] text-center text-xl tracking-[0.25em] font-mono"
+                    maxLength={12}
                     required
                     autoFocus
                     disabled={isLoading}

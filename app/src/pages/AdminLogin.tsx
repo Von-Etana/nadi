@@ -9,7 +9,7 @@ const ADMIN_ROLES = ['admin', 'super_admin'];
 
 const AdminLogin = () => {
   const navigate = useNavigate();
-  const { login, logout, isAuthenticated, isLoading, user } = useAuth();
+  const { login, logout, resetAuth, isAuthenticated, isLoading, user } = useAuth();
 
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -22,6 +22,10 @@ const AdminLogin = () => {
   });
 
   const isAdminUser = ADMIN_ROLES.includes(user?.role || '');
+
+  useEffect(() => {
+    resetAuth().catch(() => undefined);
+  }, [resetAuth]);
 
   useEffect(() => {
     if (!isAuthenticated || requires2FA || isLoading) {
@@ -56,7 +60,12 @@ const AdminLogin = () => {
         return;
       }
 
-      setRequires2FA(false);
+      if (result.authenticated === true) {
+        setRequires2FA(false);
+        return;
+      }
+
+      throw new Error('Admin login failed. Please check your credentials.');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Admin login failed. Please check your credentials.';
       setError(message);
@@ -148,22 +157,22 @@ const AdminLogin = () => {
                     <Shield className="w-8 h-8 text-[#ea580c]" />
                   </div>
                   <h3 className="text-lg font-semibold text-[#1a1a1a]">Two-Factor Authentication</h3>
-                  <p className="text-sm text-[#666] mt-1">Enter the 6-digit admin verification code</p>
+                  <p className="text-sm text-[#666] mt-1">Enter the admin authenticator code or a backup code</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-[#1a1a1a]">Verification Code</label>
                   <Input
                     type="text"
-                    placeholder="Enter 6-digit code"
+                    placeholder="Enter code"
                     value={formData.twoFactorCode}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        twoFactorCode: e.target.value.replace(/\D/g, '').slice(0, 6),
+                        twoFactorCode: e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12),
                       })
                     }
-                    className="h-14 rounded-xl border-[#e2e2e2] text-center text-2xl tracking-[0.5em] font-mono"
-                    maxLength={6}
+                    className="h-14 rounded-xl border-[#e2e2e2] text-center text-xl tracking-[0.25em] font-mono"
+                    maxLength={12}
                     required
                     autoFocus
                     disabled={isSubmitting}

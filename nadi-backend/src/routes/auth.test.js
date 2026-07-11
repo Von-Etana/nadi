@@ -1,6 +1,14 @@
+const mockAnonAuth = {
+  signInWithPassword: jest.fn(),
+  signOut: jest.fn(),
+  updateUser: jest.fn().mockResolvedValue({ data: {}, error: null }),
+  setSession: jest.fn().mockResolvedValue({ data: {}, error: null }),
+  getUser: jest.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+};
+
 const mockCreateClient = jest.fn(() => ({
   auth: {
-    updateUser: jest.fn().mockResolvedValue({ data: {}, error: null })
+    ...mockAnonAuth
   }
 }));
 
@@ -67,6 +75,7 @@ jest.mock('../utils/supabase', () => mockSupabase);
 
 const authRouter = require('./auth');
 const speakeasy = require('speakeasy');
+const crypto = require('crypto');
 
 const getRouteHandler = (path, method = 'post') => {
   const layer = authRouter.stack.find(r => r.route?.path === path && r.route?.methods[method]);
@@ -95,6 +104,8 @@ describe('Auth Router Test Suite', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockAnonAuth.updateUser.mockResolvedValue({ data: {}, error: null });
+    mockAnonAuth.signOut.mockResolvedValue({ error: null });
   });
 
   describe('POST /register', () => {
@@ -131,6 +142,151 @@ describe('Auth Router Test Suite', () => {
   });
 
   describe('POST /login', () => {
+    it('rejects invalid credentials without returning a token', async () => {
+      const updateEq = jest.fn().mockResolvedValue({ data: {}, error: null });
+      mockSupabase.from.mockImplementation((table) => {
+        if (table === 'users') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                maybeSingle: jest.fn().mockResolvedValue({
+                  data: {
+                    id: 'user-1',
+                    email: 'ada@example.com',
+                    lock_until: null,
+                    login_attempts: 0,
+                    two_factor_auth: {}
+                  },
+                  error: null
+                })
+              }))
+            })),
+            update: jest.fn(() => ({
+              eq: updateEq
+            }))
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+      mockAnonAuth.signInWithPassword.mockResolvedValue({
+        data: { user: null, session: null },
+        error: { message: 'Invalid login credentials' }
+      });
+
+      setupMockReqRes({
+        email: 'ada@example.com',
+        password: 'WrongPassword1!'
+      });
+
+      const handler = getRouteHandler('/login', 'post');
+      await handler(req, res);
+
+      expect(mockAnonAuth.signInWithPassword).toHaveBeenCalledWith({
+        email: 'ada@example.com',
+        password: 'WrongPassword1!'
+      });
+      expect(updateEq).toHaveBeenCalledWith('id', 'user-1');
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    });
+
+    it('rejects auth success without a session token', async () => {
+      mockSupabase.from.mockImplementation((table) => {
+        if (table === 'users') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                maybeSingle: jest.fn().mockResolvedValue({
+                  data: {
+                    id: 'user-1',
+                    email: 'ada@example.com',
+                    lock_until: null,
+                    login_attempts: 0,
+                    two_factor_auth: {}
+                  },
+                  error: null
+                })
+              }))
+            }))
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+      mockAnonAuth.signInWithPassword.mockResolvedValue({
+        data: {
+          user: { id: 'user-1' },
+          session: null
+        },
+        error: null
+      });
+
+      setupMockReqRes({
+        email: 'ada@example.com',
+        password: 'Password1!'
+      });
+
+      const handler = getRouteHandler('/login', 'post');
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    });
+
+    it('rejects auth success for a different user profile', async () => {
+      mockSupabase.from.mockImplementation((table) => {
+        if (table === 'users') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                maybeSingle: jest.fn().mockResolvedValue({
+                  data: {
+                    id: 'user-1',
+                    email: 'ada@example.com',
+                    lock_until: null,
+                    login_attempts: 0,
+                    two_factor_auth: {}
+                  },
+                  error: null
+                })
+              }))
+            }))
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+      mockAnonAuth.signInWithPassword.mockResolvedValue({
+        data: {
+          user: { id: 'user-2' },
+          session: {
+            access_token: 'access-token',
+            refresh_token: 'refresh-token'
+          }
+        },
+        error: null
+      });
+
+      setupMockReqRes({
+        email: 'ada@example.com',
+        password: 'Password1!'
+      });
+
+      const handler = getRouteHandler('/login', 'post');
+      await handler(req, res);
+
+      expect(mockAnonAuth.signOut).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    });
+
     it('returns 423 when the account is locked', async () => {
       mockSupabase.from.mockReturnValue({
         select: jest.fn(() => ({
@@ -162,7 +318,42 @@ describe('Auth Router Test Suite', () => {
         success: false,
         message: 'Account is temporarily locked. Please try again later.'
       });
-      expect(mockSupabase.auth.signInWithPassword).not.toHaveBeenCalled();
+      expect(mockAnonAuth.signInWithPassword).not.toHaveBeenCalled();
+    });
+
+    it('rejects deactivated accounts before issuing a session', async () => {
+      mockSupabase.from.mockReturnValue({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            maybeSingle: jest.fn().mockResolvedValue({
+              data: {
+                id: 'user-1',
+                email: 'inactive@example.com',
+                is_active: false,
+                lock_until: null,
+                login_attempts: 0,
+                two_factor_auth: {}
+              },
+              error: null
+            })
+          }))
+        }))
+      });
+
+      setupMockReqRes({
+        email: 'inactive@example.com',
+        password: 'Password1!'
+      });
+
+      const handler = getRouteHandler('/login', 'post');
+      await handler(req, res);
+
+      expect(mockAnonAuth.signInWithPassword).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        message: 'Account has been deactivated'
+      });
     });
 
     it('requires a 2FA code when two-factor is enabled', async () => {
@@ -188,9 +379,13 @@ describe('Auth Router Test Suite', () => {
           eq: jest.fn().mockResolvedValue({ data: {}, error: null })
         }))
       });
-      mockSupabase.auth.signInWithPassword.mockResolvedValue({
+      mockAnonAuth.signInWithPassword.mockResolvedValue({
         data: {
-          user: { id: 'user-2' }
+          user: { id: 'user-2' },
+          session: {
+            access_token: 'access-token',
+            refresh_token: 'refresh-token'
+          }
         },
         error: null
       });
@@ -203,7 +398,7 @@ describe('Auth Router Test Suite', () => {
       const handler = getRouteHandler('/login', 'post');
       await handler(req, res);
 
-      expect(mockSupabase.auth.signOut).toHaveBeenCalled();
+      expect(mockAnonAuth.signOut).toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(403);
       expect(res.json).toHaveBeenCalledWith({
         success: false,
@@ -211,6 +406,142 @@ describe('Auth Router Test Suite', () => {
         requires2FA: true
       });
       expect(speakeasy.totp.verify).not.toHaveBeenCalled();
+    });
+
+    it('accepts a 2FA backup code once and removes it from the profile', async () => {
+      const hashedBackupCode = crypto.createHash('sha256').update('ABC12345').digest('hex');
+      const updateEq = jest.fn().mockResolvedValue({ data: {}, error: null });
+      const update = jest.fn(() => ({ eq: updateEq }));
+
+      mockSupabase.from.mockImplementation((table) => {
+        if (table === 'users') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                maybeSingle: jest.fn().mockResolvedValue({
+                  data: {
+                    id: 'user-2',
+                    first_name: 'Mfa',
+                    last_name: 'User',
+                    email: 'mfa@example.com',
+                    phone: '+2348012345678',
+                    lock_until: null,
+                    login_attempts: 0,
+                    two_factor_auth: {
+                      enabled: true,
+                      secret: 'BASE32SECRET',
+                      backupCodes: [hashedBackupCode]
+                    }
+                  },
+                  error: null
+                })
+              }))
+            })),
+            update
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+      mockAnonAuth.signInWithPassword.mockResolvedValue({
+        data: {
+          user: { id: 'user-2' },
+          session: {
+            access_token: 'access-token',
+            refresh_token: 'refresh-token'
+          }
+        },
+        error: null
+      });
+      speakeasy.totp.verify.mockReturnValue(false);
+
+      setupMockReqRes({
+        email: 'mfa@example.com',
+        password: 'Password1!',
+        twoFactorCode: 'abc12345'
+      });
+
+      const handler = getRouteHandler('/login', 'post');
+      await handler(req, res);
+
+      expect(update).toHaveBeenCalledWith({
+        two_factor_auth: {
+          enabled: true,
+          secret: 'BASE32SECRET',
+          backupCodes: []
+        }
+      });
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        token: 'access-token',
+        refreshToken: 'refresh-token'
+      }));
+    });
+  });
+
+  describe('POST /reset-password', () => {
+    it('updates password only after validating the recovery token', async () => {
+      setupMockReqRes({
+        token: 'recovery-access-token',
+        refreshToken: 'recovery-refresh-token',
+        password: 'NewPassword1!'
+      });
+
+      const handler = getRouteHandler('/reset-password', 'post');
+      await handler(req, res);
+
+      expect(mockAnonAuth.setSession).toHaveBeenCalledWith({
+        access_token: 'recovery-access-token',
+        refresh_token: 'recovery-refresh-token'
+      });
+      expect(mockAnonAuth.getUser).toHaveBeenCalledWith('recovery-access-token');
+      expect(mockAnonAuth.updateUser).toHaveBeenCalledWith({ password: 'NewPassword1!' });
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Password reset successful. Please login with your new password.'
+      });
+    });
+  });
+
+  describe('GET /profile', () => {
+    it('returns the authenticated user role in the profile payload', async () => {
+      mockSupabase.from.mockReturnValue({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn().mockResolvedValue({
+              data: { id: 'wallet-1', user_id: 'user-1', naira_balance: 0 },
+              error: null
+            })
+          }))
+        }))
+      });
+
+      setupMockReqRes();
+      req.user = {
+        id: 'user-1',
+        first_name: 'Ada',
+        last_name: 'Okafor',
+        email: 'ada@example.com',
+        phone: '+2348012345678',
+        role: 'super_admin',
+        kyc_status: 'pending',
+        is_email_verified: true,
+        is_phone_verified: true,
+        two_factor_auth: { enabled: false },
+        referral_code: 'NADI1234',
+        preferences: {},
+        created_at: '2026-07-09T00:00:00.000Z'
+      };
+
+      const handler = getRouteHandler('/profile', 'get');
+      await handler(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        user: expect.objectContaining({
+          id: 'user-1',
+          role: 'super_admin'
+        })
+      });
     });
   });
 });

@@ -25,6 +25,35 @@ const anonSupabase = createClient(
   }
 );
 
+const rejectInvalidLogin = async (res) => {
+  await Promise.resolve(anonSupabase.auth.signOut()).catch(() => undefined);
+  return res.status(401).json({
+    success: false,
+    message: 'Invalid email or password'
+  });
+};
+
+const hashBackupCode = (code) => crypto
+  .createHash('sha256')
+  .update(String(code).trim().toUpperCase())
+  .digest('hex');
+
+const createRecoveryClient = (accessToken) => createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    },
+    global: {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    }
+  }
+);
+
 // @route   POST /api/v1/auth/register
 // @desc    Register new user
 // @access  Public
@@ -121,7 +150,7 @@ router.post('/register', [
       password
     });
 
-    if (signInError) {
+    if (signInError || !signInData?.session?.access_token || !signInData?.session?.refresh_token) {
       logger.error('Sign-in error after registration:', signInError);
       return res.status(201).json({
         success: true,
@@ -194,6 +223,14 @@ router.post('/login', [
       });
     }
 
+    if (user.is_active === false) {
+      await Promise.resolve(anonSupabase.auth.signOut()).catch(() => undefined);
+      return res.status(403).json({
+        success: false,
+        message: 'Account has been deactivated'
+      });
+    }
+
     // Check lock status
     if (user.lock_until && new Date(user.lock_until) > new Date()) {
       return res.status(423).json({
@@ -223,6 +260,15 @@ router.post('/login', [
       });
     }
 
+    if (
+      !authData?.user?.id ||
+      authData.user.id !== user.id ||
+      !authData?.session?.access_token ||
+      !authData?.session?.refresh_token
+    ) {
+      return rejectInvalidLogin(res);
+    }
+
     const userId = authData.user.id;
 
     // Check 2FA if enabled
@@ -230,7 +276,7 @@ router.post('/login', [
     if (twoFactor.enabled) {
       if (!twoFactorCode) {
         // Sign out right away to prevent unauthorized session
-        await supabase.auth.signOut();
+        await anonSupabase.auth.signOut();
         return res.status(403).json({
           success: false,
           message: 'Two-factor authentication required',
@@ -245,8 +291,22 @@ router.post('/login', [
         window: 1
       });
 
-      if (!verified) {
-        await supabase.auth.signOut();
+      let usedBackupCode = false;
+      if (!verified && Array.isArray(twoFactor.backupCodes) && twoFactorCode) {
+        const hashedBackupCode = hashBackupCode(twoFactorCode);
+        const backupCodeIndex = twoFactor.backupCodes.indexOf(hashedBackupCode);
+        usedBackupCode = backupCodeIndex !== -1;
+        if (usedBackupCode) {
+          twoFactor.backupCodes = twoFactor.backupCodes.filter((_, index) => index !== backupCodeIndex);
+          await supabase
+            .from('users')
+            .update({ two_factor_auth: twoFactor })
+            .eq('id', user.id);
+        }
+      }
+
+      if (!verified && !usedBackupCode) {
+        await anonSupabase.auth.signOut();
         return res.status(401).json({
           success: false,
           message: 'Invalid 2FA code'
@@ -280,6 +340,7 @@ router.post('/login', [
         isEmailVerified: user.is_email_verified,
         isPhoneVerified: user.is_phone_verified,
         kycStatus: user.kyc_status,
+        role: user.role,
         twoFactorEnabled: twoFactor.enabled,
         referralCode: user.referral_code
       }
@@ -338,6 +399,7 @@ router.get('/profile', auth, async (req, res) => {
         dateOfBirth: req.user.date_of_birth,
         address: req.user.address,
         kycStatus: req.user.kyc_status,
+        role: req.user.role,
         isEmailVerified: req.user.is_email_verified,
         isPhoneVerified: req.user.is_phone_verified,
         twoFactorEnabled: req.user.two_factor_auth?.enabled || false,
@@ -697,31 +759,40 @@ router.post('/reset-password', [
       });
     }
 
-    const { password, token } = req.body; // In Supabase, reset token is parsed on frontend to create user session
+    const { password, token, refreshToken } = req.body;
+    const bearerToken = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.split(' ')[1]
+      : null;
+    const accessToken = token || bearerToken;
 
-    // Reset password using frontend access token or the reset token from URL
-    // Since Supabase usually sets a session cookie/token on redirect, the user should be logged in
-    // with a temporary session on the frontend. If a token is explicitly passed in:
-    let clientSupabase = supabase;
-    if (token) {
-      const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
-        access_token: token,
-        refresh_token: token
-      });
-      if (sessionError) {
-        return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
-      }
-      const { error: updateError } = await anonSupabase.auth.updateUser(
-        { password },
-        { global: { headers: { Authorization: `Bearer ${sessionData.session.access_token}` } } }
-      );
-      if (updateError) throw updateError;
-    } else {
+    if (!accessToken) {
       return res.status(400).json({
         success: false,
         message: 'Reset token is required'
       });
     }
+
+    const recoveryClient = createRecoveryClient(accessToken);
+
+    if (refreshToken) {
+      const { error: sessionError } = await recoveryClient.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken
+      });
+      if (sessionError) {
+        return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
+      }
+    }
+
+    const { data: authUserData, error: authUserError } = await recoveryClient.auth.getUser(accessToken);
+    if (authUserError || !authUserData?.user?.id) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
+    }
+
+    const { error: updateError } = await recoveryClient.auth.updateUser({ password });
+    if (updateError) throw updateError;
+
+    await Promise.resolve(recoveryClient.auth.signOut()).catch(() => undefined);
 
     res.json({
       success: true,

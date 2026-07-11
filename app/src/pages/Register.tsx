@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const Register = () => {
   const navigate = useNavigate();
-  const { register, isAuthenticated } = useAuth();
+  const { register, isAuthenticated, user } = useAuth();
 
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -24,10 +24,10 @@ const Register = () => {
   });
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && user) {
       navigate('/dashboard', { replace: true });
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, user, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,8 +45,16 @@ const Register = () => {
       return;
     }
 
-    if (formData.password.length < 8) {
-      setError('Password must be at least 8 characters');
+    const passwordRules = [
+      formData.password.length >= 8,
+      /[A-Z]/.test(formData.password),
+      /[a-z]/.test(formData.password),
+      /[0-9]/.test(formData.password),
+      /[!@#$%^&*(),.?":{}|<>]/.test(formData.password),
+    ];
+
+    if (!passwordRules.every(Boolean)) {
+      setError('Password must include uppercase, lowercase, number, special character, and at least 8 characters');
       return;
     }
     
@@ -250,9 +258,11 @@ const Register = () => {
                 <div className="text-xs text-[#666] space-y-1">
                   <p>Password must contain:</p>
                   <ul className="space-y-1 ml-4">
-                    <li className={formData.password.length >= 8 ? 'text-green-500' : ''}>• At least 8 characters</li>
-                    <li className={/[A-Z]/.test(formData.password) ? 'text-green-500' : ''}>• One uppercase letter</li>
-                    <li className={/[0-9]/.test(formData.password) ? 'text-green-500' : ''}>• One number</li>
+                    <li className={formData.password.length >= 8 ? 'text-green-500' : ''}>- At least 8 characters</li>
+                    <li className={/[A-Z]/.test(formData.password) ? 'text-green-500' : ''}>- One uppercase letter</li>
+                    <li className={/[a-z]/.test(formData.password) ? 'text-green-500' : ''}>- One lowercase letter</li>
+                    <li className={/[0-9]/.test(formData.password) ? 'text-green-500' : ''}>- One number</li>
+                    <li className={/[!@#$%^&*(),.?":{}|<>]/.test(formData.password) ? 'text-green-500' : ''}>- One special character</li>
                   </ul>
                 </div>
               </>
