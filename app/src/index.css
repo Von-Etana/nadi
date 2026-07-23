@@ -45,7 +45,7 @@
     scroll-behavior: smooth;
   }
   body {
-    @apply bg-background text-foreground font-['Figtree',sans-serif] antialiased;
+    @apply bg-background text-foreground font-['Figtree',_-apple-system,_BlinkMacSystemFont,_'Segoe_UI',_Roboto,_sans-serif] antialiased;
   }
 }
 

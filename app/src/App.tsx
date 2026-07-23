@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import { Toaster } from '@/components/ui/sonner';
 
 // Pages
 import LandingPage from '@/pages/LandingPage';
@@ -52,6 +53,7 @@ function App() {
           </Routes>
         </BrowserRouter>
       </AuthProvider>
+      <Toaster position="top-right" richColors closeButton />
     </ErrorBoundary>
   );
 }

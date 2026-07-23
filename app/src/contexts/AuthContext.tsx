@@ -95,6 +95,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session from Supabase Client
   useEffect(() => {
+    // Timeout fallback: if session restore takes > 5s (e.g. slow network),
+    // clear auth so the UI doesn't stay frozen on a blank loading state.
+    const timeoutId = setTimeout(() => {
+      setState(prev => {
+        if (prev.isLoading) {
+          console.warn('Session restore timed out — clearing auth state.');
+          return { user: null, token: null, isAuthenticated: false, isLoading: false };
+        }
+        return prev;
+      });
+    }, 5000);
+
     const restoreSession = async () => {
       try {
         // Use getUser() for SERVER-SIDE validation, NOT getSession() which
@@ -123,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error('Failed to restore auth session:', error);
         await clearAuthState();
+      } finally {
+        clearTimeout(timeoutId);
       }
     };
 
@@ -162,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => {
+      clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
   }, [fetchProfile, clearAuthState]);
