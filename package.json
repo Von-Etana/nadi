@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix app run build",
+    "lint": "npm --prefix app run lint",
+    "test:backend": "npm --prefix nadi-backend test -- --runInBand"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
