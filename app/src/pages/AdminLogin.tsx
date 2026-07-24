@@ -114,7 +114,7 @@ const AdminLogin = () => {
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-[#1a1a1a]">Email Address</label>
                   <div className="relative">
-                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#999]" />
+                    <Mail className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#999]" />
                     <Input
                       type="email"
                       placeholder="Enter your admin email"
@@ -130,7 +130,7 @@ const AdminLogin = () => {
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-[#1a1a1a]">Password</label>
                   <div className="relative">
-                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#999]" />
+                    <Lock className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#999]" />
                     <Input
                       type={showPassword ? 'text' : 'password'}
                       placeholder="Enter your password"

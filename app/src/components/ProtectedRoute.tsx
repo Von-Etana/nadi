@@ -23,7 +23,7 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
   }
 
   if (!isAuthenticated || !user) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    return <Navigate to={requireAdmin ? '/admin/login' : '/login'} state={{ from: location }} replace />;
   }
 
   if (requireAdmin && !['admin', 'super_admin'].includes(user.role || '')) {

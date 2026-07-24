@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { httpClient } from '../services/api';
 
@@ -59,6 +59,26 @@ const clearCachedAuthStorage = () => {
     .forEach((key) => localStorage.removeItem(key));
 };
 
+const signedOutState: AuthState = {
+  user: null,
+  token: null,
+  isAuthenticated: false,
+  isLoading: false,
+};
+
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs = 8000): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error('Authentication request timed out')), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
+
 // ==========================================
 // Provider
 // ==========================================
@@ -69,24 +89,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: false,
     isLoading: true,
   });
+  const isResettingRef = useRef(false);
 
-  const clearAuthState = useCallback(async () => {
-    await supabase.auth.signOut().catch(() => undefined);
+  const clearLocalAuthState = useCallback(() => {
     clearCachedAuthStorage();
     httpClient.clearToken();
-    setState({
-      user: null,
-      token: null,
-      isAuthenticated: false,
-      isLoading: false,
-    });
+    setState(signedOutState);
   }, []);
+
+  const clearAuthState = useCallback(async () => {
+    if (isResettingRef.current) {
+      clearLocalAuthState();
+      return;
+    }
+
+    isResettingRef.current = true;
+    clearLocalAuthState();
+
+    try {
+      await withTimeout(supabase.auth.signOut(), 3000).catch(() => undefined);
+    } finally {
+      isResettingRef.current = false;
+      clearLocalAuthState();
+    }
+  }, [clearLocalAuthState]);
+
+  const clearAuthFromEvent = useCallback(() => {
+    clearLocalAuthState();
+  }, [clearLocalAuthState]);
 
   // Helper to fetch user profile via API using the given token
   const fetchProfile = useCallback(async (token: string): Promise<User> => {
     // Set token on httpClient temporarily for this request
     httpClient.setToken(token);
-    const response = await httpClient.get<{ user: User }>('/auth/profile');
+    const response = await withTimeout(httpClient.get<{ user: User }>('/auth/profile'), 8000);
     if (response.error || !response.data?.user) {
       throw new Error(response.error || 'Failed to fetch user profile');
     }
@@ -100,8 +136,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const timeoutId = setTimeout(() => {
       setState(prev => {
         if (prev.isLoading) {
-          console.warn('Session restore timed out — clearing auth state.');
-          return { user: null, token: null, isAuthenticated: false, isLoading: false };
+          console.warn('Session restore timed out - clearing auth state.');
+          clearCachedAuthStorage();
+          httpClient.clearToken();
+          return signedOutState;
         }
         return prev;
       });
@@ -111,7 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         // Use getUser() for SERVER-SIDE validation, NOT getSession() which
         // only reads from localStorage cache and can return stale/invalid sessions.
-        const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+        const { data: { user: authUser }, error: authError } = await withTimeout(supabase.auth.getUser(), 8000);
         
         if (authError || !authUser) {
           await clearAuthState();
@@ -119,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         // We have a valid authenticated user — now get the session for the access token
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await withTimeout(supabase.auth.getSession(), 8000);
         if (!session) {
           await clearAuthState();
           return;
@@ -150,10 +188,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         httpClient.setToken(session.access_token);
 
         // Validate the session server-side before trusting it
-        const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
+        const { data: { user: authUser }, error: authError } = await withTimeout(supabase.auth.getUser(), 8000);
         if (authError || !authUser) {
           console.warn('Auth state change with invalid user, clearing state');
-          await clearAuthState();
+          clearAuthFromEvent();
           return;
         }
         
@@ -168,10 +206,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
         } catch (err) {
           console.error('Error updating profile on auth state change:', err);
-          await clearAuthState();
+          clearAuthFromEvent();
         }
       } else {
-        await clearAuthState();
+        clearAuthFromEvent();
       }
     });
 
@@ -179,7 +217,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
-  }, [fetchProfile, clearAuthState]);
+  }, [fetchProfile, clearAuthState, clearAuthFromEvent]);
 
   const login = useCallback(async (email: string, password: string, twoFactorCode?: string) => {
     // CRITICAL: Clear any existing session before attempting login.
