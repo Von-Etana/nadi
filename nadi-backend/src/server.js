@@ -72,15 +72,30 @@ app.use(helmet({
 }));
 
 // CORS — explicit origin, no wildcard with credentials
-const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
-  .split(',')
-  .map(origin => origin.trim());
+const parseOrigins = (...values) => values
+  .filter(Boolean)
+  .flatMap(value => value.split(','))
+  .map(origin => origin.trim())
+  .filter(Boolean)
+  .map(origin => origin.replace(/\/$/, ''));
+
+const allowedOrigins = Array.from(new Set(parseOrigins(
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://nadi-digital.vercel.app',
+  'https://nadidigital.com',
+  'https://www.nadidigital.com',
+  process.env.FRONTEND_URL,
+  process.env.FRONTEND_URLS,
+  process.env.CORS_ORIGINS,
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ''
+)));
 
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
+    if (allowedOrigins.includes(origin.replace(/\/$/, ''))) {
       callback(null, true);
     } else {
       logger.warn(`CORS blocked request from origin: ${origin}`);
@@ -88,7 +103,7 @@ app.use(cors({
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
 }));
 
