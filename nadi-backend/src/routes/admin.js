@@ -77,6 +77,35 @@ function appendTrackingLog(entity, status, message, actorId, note) {
   };
 }
 
+const FUEL_TERMINAL_STATUSES = ['cancelled', 'delivered'];
+const FUEL_STATUS_TRANSITIONS = {
+  pending: ['accepted', 'cancelled'],
+  accepted: ['dispatched', 'cancelled'],
+  dispatched: ['delivered', 'cancelled'],
+  delivered: [],
+  cancelled: []
+};
+
+function isValidFuelTransition(currentStatus, nextStatus) {
+  const allowed = FUEL_STATUS_TRANSITIONS[currentStatus] || [];
+  return allowed.includes(nextStatus);
+}
+
+function fuelStatusMessage(status, orderNumber) {
+  switch (status) {
+    case 'accepted':
+      return `Your fuel/gas order ${orderNumber} has been accepted and assigned for fulfillment.`;
+    case 'dispatched':
+      return `Your fuel/gas order ${orderNumber} is on the way.`;
+    case 'delivered':
+      return `Your fuel/gas order ${orderNumber} has been delivered.`;
+    case 'cancelled':
+      return `Your fuel/gas order ${orderNumber} has been cancelled.`;
+    default:
+      return `Your fuel/gas order ${orderNumber} was updated.`;
+  }
+}
+
 function sanitizeSupportTicket(ticket) {
   if (!ticket) return ticket;
   return {
@@ -578,7 +607,7 @@ router.get('/fuel/orders', async (req, res) => {
 router.patch('/fuel/orders/:id/status', async (req, res) => {
   try {
     const { status, note, assignedTo, proofUrl } = req.body;
-    const allowed = ['pending', 'accepted', 'dispatched', 'delivered', 'cancelled'];
+    const allowed = ['accepted', 'dispatched', 'delivered', 'cancelled'];
     if (!allowed.includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid fuel order status' });
     }
@@ -590,27 +619,96 @@ router.patch('/fuel/orders/:id/status', async (req, res) => {
       .maybeSingle();
 
     if (orderError || !order) return res.status(404).json({ success: false, message: 'Fuel order not found' });
-    if (order.status === 'cancelled' || order.status === 'delivered') {
+    if (FUEL_TERMINAL_STATUSES.includes(order.status)) {
       return res.status(400).json({ success: false, message: `Order is already ${order.status}` });
     }
+    if (!isValidFuelTransition(order.status, status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Fuel order cannot transition from ${order.status} to ${status}`
+      });
+    }
+    if (status === 'dispatched' && !(assignedTo || order.assigned_driver)) {
+      return res.status(400).json({ success: false, message: 'Assign an operator before dispatching this order' });
+    }
 
-    const tracking = appendTrackingLog(order, status, `Fuel order marked ${status}`, req.user.id, note);
+    let refundResult = null;
+    if (status === 'cancelled' && order.transaction_id) {
+      const refundAmount = Number(order.pricing?.total || 0);
+      const { data, error: refundError } = await supabase.rpc('refund_wallet_debit', {
+        p_tx_id: order.transaction_id,
+        p_user_id: order.user_id,
+        p_amount: refundAmount,
+        p_reason: note || 'Fuel/gas order cancelled by admin'
+      });
+
+      if (refundError || data?.success === false) {
+        logger.error('Admin fuel cancellation refund failed:', refundError || data);
+        return res.status(400).json({
+          success: false,
+          message: refundError?.message || data?.message || 'Failed to refund cancelled fuel order'
+        });
+      }
+      refundResult = data;
+    }
+
+    const proof = proofUrl ? {
+      ...(order.delivery_proof || {}),
+      proofUrl,
+      recordedBy: req.user.id,
+      recordedAt: new Date().toISOString()
+    } : order.delivery_proof;
+
+    const tracking = appendTrackingLog(
+      order,
+      status,
+      note || `Fuel order marked ${status.replaceAll('_', ' ')}`,
+      req.user.id,
+      note
+    );
+
+    const updates = {
+      status,
+      assigned_driver: assignedTo || order.assigned_driver || null,
+      delivery_proof: proof,
+      admin_notes: note || order.admin_notes || null,
+      tracking,
+      updated_at: new Date().toISOString()
+    };
+
+    if (status === 'cancelled') {
+      updates.cancellation = {
+        ...(order.cancellation || {}),
+        cancelledBy: req.user.id,
+        cancelledAt: new Date().toISOString(),
+        reason: note || 'Cancelled by admin',
+        refund: refundResult
+      };
+    }
+
     const { data: updated, error: updateError } = await supabase
       .from('fuel_orders')
-      .update({
-        status,
-        assigned_driver: assignedTo || order.assigned_driver || null,
-        delivery_proof: proofUrl ? { ...(order.delivery_proof || {}), proofUrl } : order.delivery_proof,
-        admin_notes: note || order.admin_notes || null,
-        tracking
-      })
+      .update(updates)
       .eq('id', order.id)
       .select()
       .single();
 
     if (updateError) throw updateError;
 
-    res.json({ success: true, message: 'Fuel order status updated', order: updated });
+    await createNotification({
+      user_id: order.user_id,
+      type: 'order',
+      title: `Fuel Order ${status.replaceAll('_', ' ')}`,
+      message: fuelStatusMessage(status, order.order_number),
+      related_to: { table: 'fuel_orders', id: order.id }
+    }).catch(err => logger.error('Fuel admin status notification error:', err));
+
+    res.json({
+      success: true,
+      message: status === 'cancelled' ? 'Fuel order cancelled and refunded' : 'Fuel order status updated',
+      order: updated,
+      refund: refundResult
+    });
   } catch (error) {
     logger.error('Admin update fuel order status error:', error);
     res.status(500).json({ success: false, message: 'Failed to update fuel order status' });

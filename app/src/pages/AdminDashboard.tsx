@@ -161,6 +161,93 @@ const priorityClass = (priority?: string) => {
 
 const rawValue = (row: Record<string, unknown>, key: string) => row[key] as string | number | undefined;
 
+const getFuelNextStatus = (status?: string) => {
+  switch (status) {
+    case 'pending':
+      return 'accepted';
+    case 'accepted':
+      return 'dispatched';
+    case 'dispatched':
+      return 'delivered';
+    default:
+      return 'accepted';
+  }
+};
+
+const getFuelActionLabel = (status?: string) => {
+  switch (status) {
+    case 'pending':
+      return 'Accept order';
+    case 'accepted':
+      return 'Dispatch';
+    case 'dispatched':
+      return 'Mark delivered';
+    default:
+      return 'Update';
+  }
+};
+
+const isFuelTerminal = (status?: string) => status === 'cancelled' || status === 'delivered';
+
+const getDeliveryNextStatus = (status?: string) => {
+  switch (status) {
+    case 'pending':
+    case 'order_created':
+      return 'accepted';
+    case 'accepted':
+      return 'picked_up';
+    case 'picked_up':
+      return 'in_transit';
+    case 'in_transit':
+      return 'delivered';
+    default:
+      return 'accepted';
+  }
+};
+
+const getDeliveryActionLabel = (status?: string) => {
+  switch (status) {
+    case 'pending':
+    case 'order_created':
+      return 'Accept & assign';
+    case 'accepted':
+      return 'Mark picked up';
+    case 'picked_up':
+      return 'Move in transit';
+    case 'in_transit':
+      return 'Mark delivered';
+    default:
+      return 'Update';
+  }
+};
+
+const isDeliveryTerminal = (status?: string) => status === 'cancelled' || status === 'delivered';
+
+const getFuelItemLabel = (order: Record<string, unknown>) => {
+  const fuelDetails = order.fuel_details as { subtype?: string; quantity?: number } | null | undefined;
+  const gasDetails = order.gas_details as { subtype?: string; quantity?: number } | null | undefined;
+  if (fuelDetails) return `${fuelDetails.quantity || 0}L ${String(fuelDetails.subtype || 'fuel').toUpperCase()}`;
+  if (gasDetails) return `${gasDetails.quantity || 0}x ${gasDetails.subtype || 'gas cylinder'}`;
+  return String(order.order_type || 'fuel/gas');
+};
+
+const getFuelAddress = (order: Record<string, unknown>) => {
+  const deliveryAddress = order.delivery_address as { address?: string } | null | undefined;
+  return deliveryAddress?.address || 'No delivery address';
+};
+
+const getDeliveryAddress = (order: Record<string, unknown>, field: 'pickup' | 'delivery') => {
+  const address = order[field] as { address?: string; recipientName?: string; recipientPhone?: string } | null | undefined;
+  return address?.address || 'No address';
+};
+
+const getDeliveryItemLabel = (order: Record<string, unknown>) => {
+  const items = order.items as Array<{ description?: string; weight?: number; category?: string }> | undefined;
+  const firstItem = Array.isArray(items) ? items[0] : undefined;
+  if (!firstItem) return 'Delivery item';
+  return `${firstItem.description || 'Delivery item'}${firstItem.weight ? ` · ${firstItem.weight}kg` : ''}`;
+};
+
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
   const [loading, setLoading] = useState(true);
@@ -329,7 +416,7 @@ const AdminDashboard = () => {
 
   const openStatusDialog = (order: Record<string, unknown>, module: 'fuel' | 'logistics') => {
     setStatusDialog({ open: true, order, module });
-    setNextStatus(module === 'logistics' ? 'accepted' : 'accepted');
+    setNextStatus(module === 'logistics' ? getDeliveryNextStatus(String(order.status || 'pending')) : getFuelNextStatus(String(order.status || 'pending')));
     setAssignedTo(String(order.assigned_to || order.assigned_driver || ''));
     setAdminNote('');
     setProofUrl('');
@@ -723,33 +810,200 @@ const AdminDashboard = () => {
               )}
 
               {activeTab === 'delivery' && (
-                <Card>
-                  <CardHeader><CardTitle>Delivery Dispatch</CardTitle></CardHeader>
-                  <CardContent>{renderOperationsTable(deliveryOrders)}</CardContent>
-                </Card>
+                <div className="space-y-4">
+                  <div className="grid gap-4 md:grid-cols-5">
+                    {[
+                      { label: 'Pending', value: deliveryOrders.filter((order) => ['pending', 'order_created'].includes(order.status)).length },
+                      { label: 'Accepted', value: deliveryOrders.filter((order) => order.status === 'accepted').length },
+                      { label: 'Picked up', value: deliveryOrders.filter((order) => order.status === 'picked_up').length },
+                      { label: 'In transit', value: deliveryOrders.filter((order) => order.status === 'in_transit').length },
+                      { label: 'Delivered', value: deliveryOrders.filter((order) => order.status === 'delivered').length }
+                    ].map((item) => (
+                      <Card key={item.label}>
+                        <CardContent className="p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                          <p className="mt-1 text-2xl font-black">{item.value}</p>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+
+                  <Card>
+                    <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <CardTitle>Delivery Dispatch</CardTitle>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search shipment or customer" className="sm:w-72" />
+                        <Button variant="outline" onClick={loadAdminData} disabled={loading}><RefreshCw className="h-4 w-4" />Refresh</Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {deliveryOrders
+                        .filter((order) => {
+                          if (!searchText) return true;
+                          return [
+                            rawValue(order.raw, 'order_number'),
+                            order.status,
+                            getDeliveryItemLabel(order.raw),
+                            getDeliveryAddress(order.raw, 'pickup'),
+                            getDeliveryAddress(order.raw, 'delivery'),
+                            userName(order.user)
+                          ].some((value) => String(value || '').toLowerCase().includes(searchText));
+                        })
+                        .map((order) => {
+                          const status = String(order.status || 'pending');
+                          const terminal = isDeliveryTerminal(status);
+                          const delivery = order.raw.delivery as { recipientName?: string; recipientPhone?: string } | undefined;
+                          return (
+                            <div key={order.id} className="rounded-lg border border-slate-200 bg-white p-4">
+                              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                                <div className="min-w-0 space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-mono text-xs text-slate-500">{String(rawValue(order.raw, 'order_number') || order.id)}</p>
+                                    <Badge className={statusClass(status)}>{status}</Badge>
+                                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">{String((order.raw.package as { serviceType?: string } | undefined)?.serviceType || 'standard')}</Badge>
+                                  </div>
+                                  <div>
+                                    <h3 className="text-lg font-black">{getDeliveryItemLabel(order.raw)}</h3>
+                                    <p className="text-sm text-slate-500">{userName(order.user)} · Recipient: {delivery?.recipientName || 'Not provided'} {delivery?.recipientPhone ? `(${delivery.recipientPhone})` : ''}</p>
+                                  </div>
+                                  <div className="grid gap-2 text-sm text-slate-600 lg:grid-cols-2">
+                                    <p><strong className="text-slate-800">Pickup:</strong> {getDeliveryAddress(order.raw, 'pickup')}</p>
+                                    <p><strong className="text-slate-800">Dropoff:</strong> {getDeliveryAddress(order.raw, 'delivery')}</p>
+                                  </div>
+                                  <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-3">
+                                    <span>Total: <strong className="text-slate-800">{formatCurrency(order.amount)}</strong></span>
+                                    <span>Created: <strong className="text-slate-800">{formatDate(order.created_at)}</strong></span>
+                                    <span>Dispatcher: <strong className="text-slate-800">{String(rawValue(order.raw, 'assigned_to') || 'Unassigned')}</strong></span>
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap gap-2 xl:justify-end">
+                                  <Button size="sm" variant="outline" onClick={() => setSelectedOrder(order)}>View details</Button>
+                                  {!terminal && (
+                                    <Button size="sm" onClick={() => openStatusDialog(order.raw, 'logistics')}>
+                                      {getDeliveryActionLabel(status)}
+                                    </Button>
+                                  )}
+                                  {!terminal && ['pending', 'order_created', 'accepted'].includes(status) && (
+                                    <Button size="sm" variant="destructive" onClick={() => {
+                                      setStatusDialog({ open: true, order: order.raw, module: 'logistics' });
+                                      setNextStatus('cancelled');
+                                      setAssignedTo(String(rawValue(order.raw, 'assigned_to') || ''));
+                                      setAdminNote('Cancelled by operations');
+                                      setProofUrl('');
+                                    }}>
+                                      Cancel & refund
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </CardContent>
+                  </Card>
+                </div>
               )}
 
               {activeTab === 'fuel' && (
-                <Card>
-                  <CardHeader><CardTitle>Fuel & Gas Fulfillment</CardTitle></CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader><TableRow><TableHead>Reference</TableHead><TableHead>Customer</TableHead><TableHead>Type</TableHead><TableHead>Total</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
-                      <TableBody>
-                        {fuelOrders.map((order) => (
-                          <TableRow key={String(order.id)}>
-                            <TableCell className="font-mono text-xs">{String(order.order_number || order.id)}</TableCell>
-                            <TableCell>{userName(order.user as UserSummary)}</TableCell>
-                            <TableCell>{String(order.order_type || 'fuel')}</TableCell>
-                            <TableCell>{formatCurrency(Number((order.pricing as { total?: number } | undefined)?.total || 0))}</TableCell>
-                            <TableCell><Badge className={statusClass(String(order.status))}>{String(order.status)}</Badge></TableCell>
-                            <TableCell className="text-right"><Button size="sm" onClick={() => openStatusDialog(order, 'fuel')}>Update</Button></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
+                <div className="space-y-4">
+                  <div className="grid gap-4 md:grid-cols-4">
+                    {[
+                      { label: 'Pending', value: fuelOrders.filter((order) => order.status === 'pending').length },
+                      { label: 'Accepted', value: fuelOrders.filter((order) => order.status === 'accepted').length },
+                      { label: 'Dispatched', value: fuelOrders.filter((order) => order.status === 'dispatched').length },
+                      { label: 'Delivered', value: fuelOrders.filter((order) => order.status === 'delivered').length }
+                    ].map((item) => (
+                      <Card key={item.label}>
+                        <CardContent className="p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                          <p className="mt-1 text-2xl font-black">{item.value}</p>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+
+                  <Card>
+                    <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <CardTitle>Fuel & Gas Fulfillment</CardTitle>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search order or customer" className="sm:w-72" />
+                        <Button variant="outline" onClick={loadAdminData} disabled={loading}><RefreshCw className="h-4 w-4" />Refresh</Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {fuelOrders
+                        .filter((order) => {
+                          if (!searchText) return true;
+                          return [
+                            order.order_number,
+                            order.order_type,
+                            order.status,
+                            getFuelItemLabel(order),
+                            getFuelAddress(order),
+                            userName(order.user as UserSummary)
+                          ].some((value) => String(value || '').toLowerCase().includes(searchText));
+                        })
+                        .map((order) => {
+                          const status = String(order.status || 'pending');
+                          const terminal = isFuelTerminal(status);
+                          return (
+                            <div key={String(order.id)} className="rounded-lg border border-slate-200 bg-white p-4">
+                              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                                <div className="min-w-0 space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-mono text-xs text-slate-500">{String(order.order_number || order.id)}</p>
+                                    <Badge className={statusClass(status)}>{status}</Badge>
+                                    <Badge className={priorityClass(String(order.priority || 'normal'))}>{String(order.priority || 'normal')}</Badge>
+                                  </div>
+                                  <div>
+                                    <h3 className="text-lg font-black">{getFuelItemLabel(order)}</h3>
+                                    <p className="text-sm text-slate-500">{userName(order.user as UserSummary)} · {String(order.contact_phone || 'No phone')}</p>
+                                  </div>
+                                  <p className="text-sm text-slate-600">{getFuelAddress(order)}</p>
+                                  <div className="grid gap-2 text-xs text-slate-500 sm:grid-cols-3">
+                                    <span>Total: <strong className="text-slate-800">{formatCurrency(Number((order.pricing as { total?: number } | undefined)?.total || 0))}</strong></span>
+                                    <span>Scheduled: <strong className="text-slate-800">{formatDate(String(order.scheduled_date || order.created_at || ''))}</strong></span>
+                                    <span>Operator: <strong className="text-slate-800">{String(order.assigned_driver || 'Unassigned')}</strong></span>
+                                  </div>
+                                  {Boolean(order.customer_notes) && <p className="rounded-md bg-slate-50 p-2 text-xs text-slate-600">Customer note: {String(order.customer_notes)}</p>}
+                                </div>
+                                <div className="flex flex-wrap gap-2 xl:justify-end">
+                                  <Button size="sm" variant="outline" onClick={() => setSelectedOrder({
+                                    id: String(order.id),
+                                    module: 'fuel',
+                                    type: String(order.order_type || 'Fuel & Gas'),
+                                    status,
+                                    amount: Number((order.pricing as { total?: number } | undefined)?.total || 0),
+                                    created_at: String(order.created_at || new Date().toISOString()),
+                                    user: order.user as UserSummary,
+                                    raw: order
+                                  })}>
+                                    View details
+                                  </Button>
+                                  {!terminal && (
+                                    <Button size="sm" onClick={() => openStatusDialog(order, 'fuel')}>
+                                      {getFuelActionLabel(status)}
+                                    </Button>
+                                  )}
+                                  {!terminal && (
+                                    <Button size="sm" variant="destructive" onClick={() => {
+                                      setStatusDialog({ open: true, order, module: 'fuel' });
+                                      setNextStatus('cancelled');
+                                      setAssignedTo(String(order.assigned_driver || ''));
+                                      setAdminNote('Cancelled by operations');
+                                      setProofUrl('');
+                                    }}>
+                                      Cancel & refund
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </CardContent>
+                  </Card>
+                </div>
               )}
 
               {activeTab === 'users' && (

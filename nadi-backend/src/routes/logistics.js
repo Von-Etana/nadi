@@ -9,12 +9,12 @@ const { createNotification } = require('../services/notification');
 const quidaxService = require('../services/quidax');
 const logger = require('../utils/logger');
 
-const DISPATCHABLE_STATUSES = ['accepted', 'picked_up', 'in_transit', 'delivered'];
+const DISPATCHABLE_STATUSES = ['accepted', 'picked_up', 'in_transit', 'delivered', 'cancelled'];
 const TERMINAL_STATUSES = ['cancelled', 'delivered'];
 const STATUS_FLOW = {
   pending: ['accepted', 'cancelled'],
   order_created: ['accepted', 'cancelled'],
-  accepted: ['picked_up', 'in_transit'],
+  accepted: ['picked_up', 'in_transit', 'cancelled'],
   picked_up: ['in_transit', 'delivered'],
   in_transit: ['delivered'],
   delivered: [],
@@ -567,6 +567,51 @@ router.patch('/shipments/:id/status', auth, authorize('admin', 'super_admin'), a
       });
     }
 
+    let refundResult = null;
+    if (nextStatus === 'cancelled' && order.transaction_id) {
+      if (order.pricing?.paymentMethod === 'crypto') {
+        const symbol = order.pricing?.cryptoCoin;
+        const cryptoQty = Number(order.pricing?.cryptoQty || 0);
+        if (!symbol || !cryptoQty) {
+          return res.status(400).json({
+            success: false,
+            message: 'Cannot refund crypto shipment because payment details are incomplete'
+          });
+        }
+        const { data, error: refundError } = await supabase.rpc('refund_crypto_debit', {
+          p_tx_id: order.transaction_id,
+          p_user_id: order.user_id,
+          p_symbol: symbol,
+          p_amount_crypto: cryptoQty,
+          p_reason: notes || 'Shipment cancelled by admin'
+        });
+        if (refundError || data?.success === false) {
+          logger.error('Admin shipment crypto refund failed:', refundError || data);
+          return res.status(400).json({
+            success: false,
+            message: refundError?.message || data?.message || 'Failed to refund cancelled shipment'
+          });
+        }
+        refundResult = data;
+      } else {
+        const refundAmount = Number(order.pricing?.total || 0);
+        const { data, error: refundError } = await supabase.rpc('refund_wallet_debit', {
+          p_tx_id: order.transaction_id,
+          p_user_id: order.user_id,
+          p_amount: refundAmount,
+          p_reason: notes || 'Shipment cancelled by admin'
+        });
+        if (refundError || data?.success === false) {
+          logger.error('Admin shipment wallet refund failed:', refundError || data);
+          return res.status(400).json({
+            success: false,
+            message: refundError?.message || data?.message || 'Failed to refund cancelled shipment'
+          });
+        }
+        refundResult = data;
+      }
+    }
+
     const tracking = appendTrackingEvent(
       order.tracking,
       nextStatus,
@@ -587,6 +632,16 @@ router.patch('/shipments/:id/status', auth, authorize('admin', 'super_admin'), a
       updates.delivery_proof = proof;
     }
 
+    if (nextStatus === 'cancelled') {
+      updates.cancellation = {
+        ...(order.cancellation || {}),
+        cancelledBy: req.user.id,
+        cancelledAt: new Date().toISOString(),
+        reason: notes || 'Cancelled by admin',
+        refund: refundResult
+      };
+    }
+
     await supabase
       .from('logistics_orders')
       .update(updates)
@@ -597,20 +652,21 @@ router.patch('/shipments/:id/status', auth, authorize('admin', 'super_admin'), a
       ...updates
     };
 
-    if (nextStatus === 'delivered') {
-      await createNotification({
-        user_id: order.user_id,
-        type: 'order',
-        title: 'Shipment Delivered',
-        message: `Your shipment order ${order.order_number} has been delivered.`,
-        related_to: { table: 'logistics_orders', id: order.id }
-      }).catch(err => logger.error('Shipment delivery notification error:', err));
-    }
+    await createNotification({
+      user_id: order.user_id,
+      type: 'order',
+      title: `Shipment ${nextStatus.replaceAll('_', ' ')}`,
+      message: nextStatus === 'cancelled'
+        ? `Your shipment order ${order.order_number} has been cancelled.`
+        : `Your shipment order ${order.order_number} is now ${nextStatus.replaceAll('_', ' ')}.`,
+      related_to: { table: 'logistics_orders', id: order.id }
+    }).catch(err => logger.error('Shipment status notification error:', err));
 
     res.json({
       success: true,
-      message: 'Shipment status updated successfully',
-      shipment
+      message: nextStatus === 'cancelled' ? 'Shipment cancelled and refunded' : 'Shipment status updated successfully',
+      shipment,
+      refund: refundResult
     });
   } catch (error) {
     logger.error('Update shipment status error:', error);
