@@ -115,22 +115,28 @@ class QuidaxService {
    * Fetch live currency conversion rates for NGN trading pairs
    */
   async getLiveRates() {
+    if (!this.apiKey) {
+      throw new Error('QUIDAX_API_KEY is not configured');
+    }
+
     try {
       const res = await this.client.get('/markets/tickers');
       const tickers = res.data || {};
-      
-      return {
-        btc: parseFloat(tickers.btcngn?.ticker?.last || 98500000),
-        eth: parseFloat(tickers.ethngn?.ticker?.last || 5200000),
-        usdt: parseFloat(tickers.usdtngn?.ticker?.last || 1550)
+
+      const rates = {
+        btc: parseFloat(tickers.btcngn?.ticker?.last),
+        eth: parseFloat(tickers.ethngn?.ticker?.last),
+        usdt: parseFloat(tickers.usdtngn?.ticker?.last)
       };
+
+      if (!rates.btc || !rates.eth || !rates.usdt) {
+        throw new Error('Quidax returned incomplete market rates');
+      }
+
+      return rates;
     } catch (err) {
-      logger.error(`Quidax getLiveRates error: ${err.message}. Falling back to default rates.`);
-      return {
-        btc: 98500000,
-        eth: 5200000,
-        usdt: 1550
-      };
+      logger.error(`Quidax getLiveRates error: ${err.message}`);
+      throw new Error(err.message || 'Failed to retrieve Quidax rates');
     }
   }
 

@@ -7,13 +7,16 @@ const IS_SANDBOX = process.env.RELOADLY_SANDBOX !== 'false'; // Default to sandb
 
 const TOPUPS_AUDIENCE = IS_SANDBOX ? 'https://topups-sandbox.reloadly.com' : 'https://topups.reloadly.com';
 const UTILITIES_AUDIENCE = IS_SANDBOX ? 'https://utilities-sandbox.reloadly.com' : 'https://utilities.reloadly.com';
+const GIFTCARDS_AUDIENCE = IS_SANDBOX ? 'https://giftcards-sandbox.reloadly.com' : 'https://giftcards.reloadly.com';
 const AUTH_URL = 'https://auth.reloadly.com/oauth/token';
 
 let tokenCache = {
   topups: null,
   utilities: null,
+  giftcards: null,
   topupsExpiry: null,
-  utilitiesExpiry: null
+  utilitiesExpiry: null,
+  giftcardsExpiry: null
 };
 
 // Obtain OAuth2 token from Reloadly
@@ -25,8 +28,20 @@ async function getAccessToken(audienceType) {
   if (audienceType === 'utilities' && tokenCache.utilities && tokenCache.utilitiesExpiry > now) {
     return tokenCache.utilities;
   }
+  if (audienceType === 'giftcards' && tokenCache.giftcards && tokenCache.giftcardsExpiry > now) {
+    return tokenCache.giftcards;
+  }
 
-  const audience = audienceType === 'topups' ? TOPUPS_AUDIENCE : UTILITIES_AUDIENCE;
+  if (!CLIENT_SECRET) {
+    throw new Error('Reloadly credentials are not configured');
+  }
+
+  const audienceMap = {
+    topups: TOPUPS_AUDIENCE,
+    utilities: UTILITIES_AUDIENCE,
+    giftcards: GIFTCARDS_AUDIENCE
+  };
+  const audience = audienceMap[audienceType] || TOPUPS_AUDIENCE;
 
   // If no Client ID is configured, fallback to using Client Secret (API Key) directly
   if (!CLIENT_ID) {
@@ -50,15 +65,69 @@ async function getAccessToken(audienceType) {
     if (audienceType === 'topups') {
       tokenCache.topups = token;
       tokenCache.topupsExpiry = now + (expiresIn - 60) * 1000; // buffer of 1 minute
-    } else {
+    } else if (audienceType === 'utilities') {
       tokenCache.utilities = token;
       tokenCache.utilitiesExpiry = now + (expiresIn - 60) * 1000;
+    } else {
+      tokenCache.giftcards = token;
+      tokenCache.giftcardsExpiry = now + (expiresIn - 60) * 1000;
     }
 
     return token;
   } catch (error) {
     logger.error(`Failed to retrieve Reloadly access token for ${audienceType}:`, error.response?.data || error.message);
     throw new Error('Reloadly authentication failed');
+  }
+}
+
+async function getGiftCardProducts(countryCode = 'NG') {
+  try {
+    const token = await getAccessToken('giftcards');
+    const response = await axios.get(`${GIFTCARDS_AUDIENCE}/products`, {
+      params: {
+        countryCode,
+        includeRange: true,
+        size: 200
+      },
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/com.reloadly.giftcards-v1+json'
+      }
+    });
+    return response.data.content || response.data;
+  } catch (error) {
+    logger.error('Reloadly Gift Card Products Error:', error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || 'Failed to retrieve gift card products');
+  }
+}
+
+async function orderGiftCard({ productId, quantity = 1, unitPrice, senderName, recipientEmail, recipientPhone, customIdentifier }) {
+  try {
+    const token = await getAccessToken('giftcards');
+    const response = await axios.post(`${GIFTCARDS_AUDIENCE}/orders`, {
+      productId,
+      quantity,
+      unitPrice,
+      customIdentifier,
+      senderName,
+      recipientEmail,
+      recipientPhoneDetails: recipientPhone
+        ? {
+            countryCode: 'NG',
+            phoneNumber: recipientPhone.replace('+234', '').replace(/^0/, '')
+          }
+        : undefined
+    }, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/com.reloadly.giftcards-v1+json'
+      }
+    });
+    return response.data;
+  } catch (error) {
+    logger.error('Reloadly Gift Card Order Error:', error.response?.data || error.message);
+    throw new Error(error.response?.data?.message || 'Gift card order failed');
   }
 }
 
@@ -195,5 +264,7 @@ module.exports = {
   getBillers,
   validateBillerAccount,
   payBill,
-  getOperatorById
+  getOperatorById,
+  getGiftCardProducts,
+  orderGiftCard
 };

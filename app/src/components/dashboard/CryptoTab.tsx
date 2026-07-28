@@ -17,7 +17,7 @@ interface CryptoTabProps {
 }
 
 export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProps) => {
-  const [activeAction, setActiveAction] = useState<'buy' | 'sell' | 'swap'>('buy');
+  const [activeAction, setActiveAction] = useState<'buy' | 'sell' | 'swap' | 'withdraw'>('buy');
   const [pricesLoading, setPricesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -44,12 +44,13 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
   const [selectedCoin, setSelectedCoin] = useState('btc');
   const [tradeAmount, setTradeAmount] = useState('');
   const [swapToCoin, setSwapToCoin] = useState('usdt');
+  const [withdrawAddress, setWithdrawAddress] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
   const cryptos = [
     { id: 'btc', name: 'Bitcoin', symbol: 'BTC', price: prices.btc, change: priceChanges.btc, balance: assets.find(a => a.symbol === 'btc')?.balance || initialCryptoBalance },
-    { id: 'eth', name: 'Ethereum', symbol: 'ETH', price: prices.eth, change: priceChanges.eth, balance: assets.find(a => a.symbol === 'eth')?.balance || 0.5 },
-    { id: 'usdt', name: 'Tether', symbol: 'USDT', price: prices.usdt, change: priceChanges.usdt, balance: assets.find(a => a.symbol === 'usdt')?.balance || 500 },
+    { id: 'eth', name: 'Ethereum', symbol: 'ETH', price: prices.eth, change: priceChanges.eth, balance: assets.find(a => a.symbol === 'eth')?.balance || 0 },
+    { id: 'usdt', name: 'Tether', symbol: 'USDT', price: prices.usdt, change: priceChanges.usdt, balance: assets.find(a => a.symbol === 'usdt')?.balance || 0 },
   ];
 
   const fetchCryptoData = async () => {
@@ -82,7 +83,7 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
       }
     } catch (err: any) {
       console.error('Failed to fetch crypto prices/assets:', err);
-      // Fail silently to keep using fallback defaults
+      setError(err.message || 'Crypto provider is unavailable. Please try again later.');
     } finally {
       setPricesLoading(false);
     }
@@ -93,10 +94,6 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
       setAddressLoading(true);
       setWalletAddress(null);
       const res = await cryptoApi.getWalletAddress(coin);
-      if (res.status === 501) {
-        setWalletAddress('Coming Soon (Not implemented on backend)');
-        return;
-      }
       if (res.data && res.data.success) {
         setWalletAddress(res.data.address);
       } else {
@@ -104,7 +101,7 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
       }
     } catch (err) {
       console.error(err);
-      setWalletAddress('Coming Soon (Under Maintenance)');
+      setWalletAddress('Address unavailable. Please try again later.');
     } finally {
       setAddressLoading(false);
     }
@@ -143,22 +140,28 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
           amount: parseFloat(tradeAmount),
           destination: 'wallet'
         });
-      } else {
+      } else if (activeAction === 'swap') {
         response = await cryptoApi.swap({
           fromCrypto: selectedCoin,
           toCrypto: swapToCoin,
           amount: parseFloat(tradeAmount)
         });
-      }
-
-      if (response.status === 501) {
-        setError(`Crypto ${activeAction} functionality is coming soon! Keep an eye out for updates.`);
-        return;
+      } else {
+        if (!withdrawAddress.trim()) {
+          setError('Enter a withdrawal address');
+          return;
+        }
+        response = await cryptoApi.withdraw({
+          crypto: selectedCoin,
+          amount: parseFloat(tradeAmount),
+          address: withdrawAddress.trim()
+        });
       }
 
       if (response.data && response.data.success) {
         setSuccess(`Successfully completed ${activeAction} trade!`);
         setTradeAmount('');
+        setWithdrawAddress('');
         fetchCryptoData();
       } else {
         setError(response.error || 'Trade transaction failed');
@@ -240,6 +243,15 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
             >
               <ArrowRightLeft className="w-4 h-4" />
               Swap
+            </button>
+            <button
+              onClick={() => { setActiveAction('withdraw'); }}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                activeAction === 'withdraw' ? 'bg-[#ea580c] text-white shadow-sm' : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+            >
+              <ArrowUpRight className="w-4 h-4" />
+              Withdraw
             </button>
           </div>
         </div>
@@ -337,7 +349,7 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
         <div className="bg-white rounded-3xl p-6 border border-[#e2e2e2]/60 shadow-sm space-y-6 h-fit">
           <div>
             <h3 className="text-lg font-bold text-[#1a1a1a] capitalize">{activeAction} Cryptocurrency</h3>
-            <p className="text-xs text-[#999]">Instantly swap Naira or exchange coins</p>
+            <p className="text-xs text-[#999]">Buy, sell, swap, or withdraw through the connected crypto provider</p>
           </div>
 
           {error && (
@@ -403,6 +415,20 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
               </div>
             )}
 
+            {activeAction === 'withdraw' && (
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-[#1a1a1a]">Withdrawal Address</label>
+                <Input
+                  type="text"
+                  placeholder="Paste external wallet address"
+                  value={withdrawAddress}
+                  onChange={(e) => setWithdrawAddress(e.target.value)}
+                  className="h-12 rounded-xl border-[#e2e2e2] font-mono text-xs"
+                  required
+                />
+              </div>
+            )}
+
             {/* Trade Amount */}
             <div className="space-y-2">
               <label className="text-xs font-semibold text-[#1a1a1a]">
@@ -433,7 +459,9 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
                     ? `${(parseFloat(tradeAmount) / prices[selectedCoin]).toFixed(6)} ${selectedCoin.toUpperCase()}`
                     : activeAction === 'sell'
                       ? `₦${(parseFloat(tradeAmount) * prices[selectedCoin]).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                      : `${((parseFloat(tradeAmount) * prices[selectedCoin]) / prices[swapToCoin]).toFixed(6)} ${swapToCoin.toUpperCase()}`
+                      : activeAction === 'swap'
+                        ? `${((parseFloat(tradeAmount) * prices[selectedCoin]) / prices[swapToCoin]).toFixed(6)} ${swapToCoin.toUpperCase()}`
+                        : `${parseFloat(tradeAmount).toFixed(6)} ${selectedCoin.toUpperCase()}`
                   }
                 </span>
               </div>

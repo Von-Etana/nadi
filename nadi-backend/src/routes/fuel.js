@@ -8,7 +8,7 @@ const what3words = require('../services/what3words');
 const { createNotification } = require('../services/notification');
 const logger = require('../utils/logger');
 
-const prices = {
+const DEFAULT_PRICES = {
   fuel: {
     pms: { price: 617, unit: 'per litre', name: 'Premium Motor Spirit (Petrol)' },
     ago: { price: 1100, unit: 'per litre', name: 'Automotive Gas Oil (Diesel)' },
@@ -22,6 +22,21 @@ const prices = {
   },
   deliveryFee: 1500
 };
+
+async function getFuelPrices() {
+  const { data, error } = await supabase
+    .from('operational_settings')
+    .select('value')
+    .eq('key', 'fuel')
+    .maybeSingle();
+
+  if (error) {
+    logger.warn('Fuel settings unavailable, using defaults:', error.message);
+    return DEFAULT_PRICES;
+  }
+
+  return data?.value || DEFAULT_PRICES;
+}
 
 // Helper function to resolve addresses (checking for what3words format)
 async function resolveAddress(addressStr) {
@@ -57,6 +72,7 @@ async function resolveAddress(addressStr) {
 // @access  Private
 router.get('/prices', auth, async (req, res) => {
   try {
+    const prices = await getFuelPrices();
     res.json({
       success: true,
       prices: {
@@ -75,7 +91,7 @@ router.get('/prices', auth, async (req, res) => {
 // @access  Private
 router.post('/orders', auth, [
   body('type').isIn(['fuel', 'gas']).withMessage('Type must be fuel or gas'),
-  body('subtype').notEmpty().withMessage('Subtype is required'),
+  body('subtype').optional().notEmpty().withMessage('Subtype is required'),
   body('quantity').isFloat({ min: 1 }).withMessage('Quantity must be at least 1'),
   body('deliveryAddress').notEmpty().withMessage('Delivery address is required'),
   body('phoneNumber').notEmpty().withMessage('Phone number is required'),
@@ -90,16 +106,24 @@ router.post('/orders', auth, [
 
     const {
       type,
-      subtype,
+      subtype: requestedSubtype,
+      fuelType,
+      cylinderSize,
       quantity,
       deliveryAddress,
       phoneNumber,
       priority = 'normal',
       scheduledDate,
-      customerNotes
+      customerNotes,
+      notes
     } = req.body;
 
     const qtyNum = parseFloat(quantity);
+    const prices = await getFuelPrices();
+    const subtype = requestedSubtype || (type === 'fuel' ? fuelType : cylinderSize);
+    if (!subtype) {
+      return res.status(400).json({ success: false, message: 'Subtype is required' });
+    }
     let unitPrice = 0;
     let description = '';
 
@@ -170,7 +194,7 @@ router.post('/orders', auth, [
           status: 'pending',
           priority,
           scheduled_date: scheduledDate ? new Date(scheduledDate).toISOString() : null,
-          customer_notes: customerNotes || null,
+          customer_notes: customerNotes || notes || null,
           tracking: {
             status: 'order_created',
             logs: [{ status: 'order_created', timestamp: new Date().toISOString(), message: 'Order submitted' }]

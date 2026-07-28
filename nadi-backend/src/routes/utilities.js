@@ -547,4 +547,26 @@ router.post('/data', auth, [
   }
 });
 
+// @route   GET /api/v1/utilities/history
+// @desc    Get authenticated user's utility transaction history
+// @access  Private
+router.get('/history', auth, async (req, res) => {
+  try {
+    const { data: transactions, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .eq('category', 'utility')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    res.json({ success: true, transactions: transactions || [] });
+  } catch (error) {
+    logger.error('Utility history error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch utility history' });
+  }
+});
+
 module.exports = router;

@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
+const bcrypt = require('bcryptjs');
 
 const supabase = require('../utils/supabase');
 const { auth } = require('../middleware/auth');
@@ -548,6 +549,59 @@ router.post('/change-password', auth, [
       success: false,
       message: 'Failed to change password'
     });
+  }
+});
+
+// @route   POST /api/v1/auth/transaction-pin
+// @desc    Set or change transaction PIN
+// @access  Private
+router.post('/transaction-pin', auth, [
+  body('newPin').isLength({ min: 4, max: 4 }).matches(/^\d{4}$/).withMessage('New PIN must be exactly 4 digits'),
+  body('currentPin').optional().isLength({ min: 4, max: 4 }).matches(/^\d{4}$/).withMessage('Current PIN must be exactly 4 digits')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { currentPin, newPin } = req.body;
+    const { data: profile, error: profileError } = await supabase
+      .from('users')
+      .select('transaction_pin')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      return res.status(404).json({ success: false, message: 'User profile not found' });
+    }
+
+    if (profile.transaction_pin) {
+      if (!currentPin) {
+        return res.status(400).json({ success: false, message: 'Current PIN is required to change your transaction PIN' });
+      }
+
+      const isCurrentPinValid = await bcrypt.compare(currentPin, profile.transaction_pin);
+      if (!isCurrentPinValid) {
+        return res.status(401).json({ success: false, message: 'Current transaction PIN is incorrect' });
+      }
+    }
+
+    const hashedPin = await bcrypt.hash(newPin, 12);
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ transaction_pin: hashedPin, updated_at: new Date().toISOString() })
+      .eq('id', req.user.id);
+
+    if (updateError) throw updateError;
+
+    res.json({
+      success: true,
+      message: profile.transaction_pin ? 'Transaction PIN changed successfully' : 'Transaction PIN set successfully'
+    });
+  } catch (error) {
+    logger.error('Update transaction PIN error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update transaction PIN' });
   }
 });
 

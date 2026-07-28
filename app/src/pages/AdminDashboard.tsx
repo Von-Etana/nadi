@@ -1,884 +1,584 @@
-import { useState } from 'react';
-import { 
-  LayoutDashboard, 
-  Users, 
-  Gift, 
-  Truck, 
-  Fuel, 
-  Zap, 
-  TrendingUp,
-  Bell,
-  Search,
+import { useEffect, useMemo, useState } from 'react';
+import {
   CheckCircle,
-  XCircle,
   Clock,
-  ArrowUpRight,
-  DollarSign,
-  CreditCard,
-  Bitcoin,
-  Package,
-  Settings,
+  Fuel,
+  Gift,
+  LayoutDashboard,
   LogOut,
-  Menu,
-  X,
-  Download,
-  Eye,
-  Edit
+  Package,
+  RefreshCw,
+  Settings,
+  Users,
+  Wallet,
+  XCircle
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
 } from '@/components/ui/table';
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTitle
 } from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select';
-import { toast } from 'sonner';
+import { adminApi } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 
-interface Order {
+type AdminTab = 'dashboard' | 'orders' | 'giftcards' | 'fuel' | 'users' | 'transactions' | 'settings';
+
+type OperationOrder = {
   id: string;
+  module: 'giftcards' | 'logistics' | 'fuel';
   type: string;
-  user: string;
+  status: string;
   amount: number;
-  status: 'pending' | 'processing' | 'completed' | 'cancelled';
-  date: string;
-  details: any;
-}
+  created_at: string;
+  user?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+  };
+  raw: any;
+};
 
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  phone: string;
-  balance: number;
-  status: 'active' | 'suspended' | 'banned';
-  joined: string;
-  kycStatus: 'pending' | 'verified' | 'rejected';
-}
+const formatCurrency = (value?: number) => `NGN ${Number(value || 0).toLocaleString()}`;
 
-interface Transaction {
-  id: string;
-  user: string;
-  type: string;
-  amount: number;
-  status: 'success' | 'pending' | 'failed';
-  date: string;
-  reference: string;
-}
+const userName = (user?: OperationOrder['user']) => {
+  if (!user) return 'Unknown user';
+  const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+  return fullName || user.email || user.phone || 'Unknown user';
+};
 
-interface Stats {
-  totalUsers: number;
-  totalRevenue: number;
-  totalTransactions: number;
-  pendingOrders: number;
-  todayRevenue: number;
-  activeUsers: number;
-}
+const statusClass = (status?: string) => {
+  switch (status) {
+    case 'completed':
+    case 'approved':
+    case 'delivered':
+      return 'bg-green-50 text-green-700 border-green-200';
+    case 'pending':
+    case 'pending_review':
+    case 'accepted':
+    case 'dispatched':
+    case 'in_transit':
+      return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'cancelled':
+    case 'rejected':
+    case 'failed':
+      return 'bg-red-50 text-red-700 border-red-200';
+    default:
+      return 'bg-slate-50 text-slate-700 border-slate-200';
+  }
+};
 
 const AdminDashboard = () => {
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [stats, setStats] = useState<any>({});
+  const [orders, setOrders] = useState<OperationOrder[]>([]);
+  const [giftCardSales, setGiftCardSales] = useState<any[]>([]);
+  const [fuelOrders, setFuelOrders] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [settings, setSettings] = useState<any>({});
+  const [selectedOrder, setSelectedOrder] = useState<OperationOrder | null>(null);
+  const [statusDialog, setStatusDialog] = useState<{ open: boolean; order?: any; module?: 'fuel' | 'logistics' }>({ open: false });
+  const [nextStatus, setNextStatus] = useState('accepted');
+  const [adminNote, setAdminNote] = useState('');
+  const [search, setSearch] = useState('');
+  const { logout, user } = useAuth();
+  const navigate = useNavigate();
 
-  // Mock data - replace with API calls
-  const [stats] = useState<Stats>({
-    totalUsers: 1247,
-    totalRevenue: 45892050,
-    totalTransactions: 8934,
-    pendingOrders: 23,
-    todayRevenue: 1250000,
-    activeUsers: 89
-  });
-
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: 'ORD-001',
-      type: 'Gift Card',
-      user: 'john.doe@email.com',
-      amount: 50000,
-      status: 'pending',
-      date: '2024-03-07 14:30',
-      details: { cardType: 'Amazon', cardValue: 100 }
-    },
-    {
-      id: 'ORD-002',
-      type: 'Crypto Buy',
-      user: 'jane.smith@email.com',
-      amount: 150000,
-      status: 'processing',
-      date: '2024-03-07 13:45',
-      details: { crypto: 'BTC', amount: 0.0025 }
-    },
-    {
-      id: 'ORD-003',
-      type: 'Utility Payment',
-      user: 'mike.jones@email.com',
-      amount: 15000,
-      status: 'completed',
-      date: '2024-03-07 12:20',
-      details: { type: 'PHCN', meterNumber: '123456789' }
-    },
-    {
-      id: 'ORD-004',
-      type: 'Delivery',
-      user: 'sarah.wilson@email.com',
-      amount: 8500,
-      status: 'pending',
-      date: '2024-03-07 11:15',
-      details: { pickup: 'Lekki', dropoff: 'Ikeja', item: 'Documents' }
-    },
-    {
-      id: 'ORD-005',
-      type: 'Fuel Delivery',
-      user: 'david.brown@email.com',
-      amount: 25000,
-      status: 'completed',
-      date: '2024-03-07 10:00',
-      details: { fuelType: 'Petrol', liters: 20, location: 'Victoria Island' }
-    },
-  ]);
-
-  const [users, setUsers] = useState<User[]>([
-    {
-      id: 'USR-001',
-      name: 'John Doe',
-      email: 'john.doe@email.com',
-      phone: '+2348012345678',
-      balance: 125000,
-      status: 'active',
-      joined: '2024-01-15',
-      kycStatus: 'verified'
-    },
-    {
-      id: 'USR-002',
-      name: 'Jane Smith',
-      email: 'jane.smith@email.com',
-      phone: '+2348098765432',
-      balance: 75000,
-      status: 'active',
-      joined: '2024-02-01',
-      kycStatus: 'pending'
-    },
-    {
-      id: 'USR-003',
-      name: 'Mike Jones',
-      email: 'mike.jones@email.com',
-      phone: '+2348056789012',
-      balance: 0,
-      status: 'suspended',
-      joined: '2024-01-20',
-      kycStatus: 'rejected'
-    },
-  ]);
-
-  const [transactions] = useState<Transaction[]>([
-    {
-      id: 'TRX-001',
-      user: 'john.doe@email.com',
-      type: 'Wallet Funding',
-      amount: 50000,
-      status: 'success',
-      date: '2024-03-07 14:30',
-      reference: 'PAY-123456'
-    },
-    {
-      id: 'TRX-002',
-      user: 'jane.smith@email.com',
-      type: 'Crypto Purchase',
-      amount: 150000,
-      status: 'success',
-      date: '2024-03-07 13:45',
-      reference: 'CRY-789012'
-    },
-    {
-      id: 'TRX-003',
-      user: 'mike.jones@email.com',
-      type: 'Utility Payment',
-      amount: 15000,
-      status: 'pending',
-      date: '2024-03-07 12:20',
-      reference: 'UTL-345678'
-    },
-  ]);
-
-  const handleOrderAction = (orderId: string, action: 'approve' | 'reject' | 'process') => {
-    setOrders(orders.map(order => {
-      if (order.id === orderId) {
-        return {
-          ...order,
-          status: action === 'approve' ? 'completed' : action === 'reject' ? 'cancelled' : 'processing'
-        };
-      }
-      return order;
-    }));
-    toast.success(`Order ${action}ed successfully`);
-    setOrderDialogOpen(false);
-  };
-
-  const handleUserAction = (userId: string, action: 'suspend' | 'activate' | 'ban') => {
-    setUsers(users.map(user => {
-      if (user.id === userId) {
-        return {
-          ...user,
-          status: action === 'suspend' ? 'suspended' : action === 'ban' ? 'banned' : 'active'
-        };
-      }
-      return user;
-    }));
-    toast.success(`User ${action}d successfully`);
-  };
-
-  const getStatusBadge = (status: string) => {
-    const styles: Record<string, string> = {
-      pending: 'bg-yellow-100 text-yellow-800',
-      processing: 'bg-blue-100 text-blue-800',
-      completed: 'bg-green-100 text-green-800',
-      cancelled: 'bg-red-100 text-red-800',
-      success: 'bg-green-100 text-green-800',
-      failed: 'bg-red-100 text-red-800',
-      active: 'bg-green-100 text-green-800',
-      suspended: 'bg-yellow-100 text-yellow-800',
-      banned: 'bg-red-100 text-red-800',
-      verified: 'bg-green-100 text-green-800',
-      rejected: 'bg-red-100 text-red-800'
-    };
-    return styles[status] || 'bg-gray-100 text-gray-800';
-  };
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-NG', {
-      style: 'currency',
-      currency: 'NGN'
-    }).format(amount);
-  };
-
-  const sidebarItems = [
+  const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'orders', label: 'Orders', icon: Package },
-    { id: 'users', label: 'Users', icon: Users },
-    { id: 'transactions', label: 'Transactions', icon: CreditCard },
+    { id: 'orders', label: 'Operations', icon: Package },
     { id: 'giftcards', label: 'Gift Cards', icon: Gift },
-    { id: 'crypto', label: 'Crypto', icon: Bitcoin },
-    { id: 'logistics', label: 'Logistics', icon: Truck },
     { id: 'fuel', label: 'Fuel & Gas', icon: Fuel },
-    { id: 'utilities', label: 'Utilities', icon: Zap },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'users', label: 'Users', icon: Users },
+    { id: 'transactions', label: 'Transactions', icon: Wallet },
+    { id: 'settings', label: 'Settings', icon: Settings }
+  ] as const;
+
+  const loadAdminData = async () => {
+    try {
+      setLoading(true);
+      const [
+        statsRes,
+        ordersRes,
+        salesRes,
+        fuelRes,
+        usersRes,
+        txRes,
+        settingsRes
+      ] = await Promise.all([
+        adminApi.getDashboardStats(),
+        adminApi.getOperationOrders(),
+        adminApi.getGiftCardSales(),
+        adminApi.getFuelOrders(),
+        adminApi.getUsers({ limit: 50 }),
+        adminApi.getTransactions({ limit: 50 }),
+        adminApi.getSettings()
+      ]);
+
+      setStats(statsRes.data?.stats || {});
+      setOrders(ordersRes.data?.orders || []);
+      setGiftCardSales(salesRes.data?.sales || []);
+      setFuelOrders(fuelRes.data?.orders || []);
+      setUsers(usersRes.data?.users || []);
+      setTransactions(txRes.data?.transactions || []);
+      setSettings(settingsRes.data?.settings || {});
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to load admin data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAdminData();
+  }, []);
+
+  const filteredOrders = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return orders;
+    return orders.filter((order) => [
+      order.type,
+      order.module,
+      order.status,
+      userName(order.user),
+      order.raw?.order_number,
+      order.raw?.card_type
+    ].some((value) => String(value || '').toLowerCase().includes(needle)));
+  }, [orders, search]);
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/admin/login', { replace: true });
+  };
+
+  const handleGiftCardDecision = async (id: string, action: 'approve' | 'reject') => {
+    try {
+      setActionLoading(true);
+      if (action === 'approve') {
+        await adminApi.approveGiftCardSale(id);
+        toast.success('Gift card sale approved and wallet credited');
+      } else {
+        await adminApi.rejectGiftCardSale(id, adminNote || 'Rejected by admin');
+        toast.success('Gift card sale rejected');
+      }
+      setAdminNote('');
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to ${action} gift card sale`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleManualStatus = async () => {
+    if (!statusDialog.order) return;
+    try {
+      setActionLoading(true);
+      if (statusDialog.module === 'logistics') {
+        if (nextStatus === 'accepted' && !statusDialog.order.assigned_to) {
+          await adminApi.assignShipment(statusDialog.order.id, {
+            assignedTo: user?.email || user?.id || 'admin',
+            note: adminNote || undefined
+          });
+        } else {
+          await adminApi.updateShipmentStatus(statusDialog.order.id, {
+            status: nextStatus,
+            note: adminNote || undefined
+          });
+        }
+        toast.success('Delivery status updated');
+      } else {
+        await adminApi.updateFuelOrderStatus(statusDialog.order.id, {
+          status: nextStatus,
+          note: adminNote || undefined
+        });
+        toast.success('Fuel order status updated');
+      }
+      setStatusDialog({ open: false });
+      setAdminNote('');
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update fuel order');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSettingsSave = async () => {
+    try {
+      setActionLoading(true);
+      await adminApi.updateSettings(settings);
+      toast.success('Settings saved');
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const summaryCards = [
+    { label: 'Users', value: stats.totalUsers || users.length, icon: Users },
+    { label: 'Transactions', value: stats.totalTransactions || transactions.length, icon: Wallet },
+    { label: 'Pending Ops', value: orders.filter((order) => ['pending', 'pending_review', 'accepted', 'dispatched'].includes(order.status)).length, icon: Clock },
+    { label: 'Monthly Revenue', value: formatCurrency(stats.monthlyRevenue || 0), icon: CheckCircle }
   ];
 
-  const renderDashboard = () => (
-    <div className="space-y-6">
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Users</p>
-                <p className="text-2xl font-bold">{stats.totalUsers.toLocaleString()}</p>
-              </div>
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Users className="w-6 h-6 text-blue-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Total Revenue</p>
-                <p className="text-2xl font-bold">{formatCurrency(stats.totalRevenue)}</p>
-              </div>
-              <div className="p-3 bg-green-100 rounded-lg">
-                <DollarSign className="w-6 h-6 text-green-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Transactions</p>
-                <p className="text-2xl font-bold">{stats.totalTransactions.toLocaleString()}</p>
-              </div>
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <TrendingUp className="w-6 h-6 text-purple-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Pending Orders</p>
-                <p className="text-2xl font-bold">{stats.pendingOrders}</p>
-              </div>
-              <div className="p-3 bg-yellow-100 rounded-lg">
-                <Clock className="w-6 h-6 text-yellow-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Today's Revenue</p>
-                <p className="text-2xl font-bold">{formatCurrency(stats.todayRevenue)}</p>
-              </div>
-              <div className="p-3 bg-orange-100 rounded-lg">
-                <ArrowUpRight className="w-6 h-6 text-orange-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-500">Active Users</p>
-                <p className="text-2xl font-bold">{stats.activeUsers}</p>
-              </div>
-              <div className="p-3 bg-cyan-100 rounded-lg">
-                <LayoutDashboard className="w-6 h-6 text-cyan-600" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Recent Orders & Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Recent Orders</CardTitle>
-            <Button variant="outline" size="sm" onClick={() => setActiveTab('orders')}>
-              View All
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Order ID</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {orders.slice(0, 5).map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell className="font-medium">{order.id}</TableCell>
-                    <TableCell>{order.type}</TableCell>
-                    <TableCell>{formatCurrency(order.amount)}</TableCell>
-                    <TableCell>
-                      <Badge className={getStatusBadge(order.status)}>
-                        {order.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Transactions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Reference</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {transactions.slice(0, 5).map((trx) => (
-                  <TableRow key={trx.id}>
-                    <TableCell className="font-medium">{trx.reference}</TableCell>
-                    <TableCell>{trx.type}</TableCell>
-                    <TableCell>{formatCurrency(trx.amount)}</TableCell>
-                    <TableCell>
-                      <Badge className={getStatusBadge(trx.status)}>
-                        {trx.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-
-  const renderOrders = () => (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <CardTitle>All Orders</CardTitle>
-          <div className="flex gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <Input
-                placeholder="Search orders..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 w-64"
-              />
-            </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-40">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="processing">Processing</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline" size="icon">
-              <Download className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Order ID</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead>Amount</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {orders
-              .filter(order => 
-                (statusFilter === 'all' || order.status === statusFilter) &&
-                (order.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                 order.user.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                 order.type.toLowerCase().includes(searchQuery.toLowerCase()))
-              )
-              .map((order) => (
-              <TableRow key={order.id}>
-                <TableCell className="font-medium">{order.id}</TableCell>
-                <TableCell>{order.type}</TableCell>
-                <TableCell>{order.user}</TableCell>
-                <TableCell>{formatCurrency(order.amount)}</TableCell>
-                <TableCell>
-                  <Badge className={getStatusBadge(order.status)}>
-                    {order.status}
-                  </Badge>
-                </TableCell>
-                <TableCell>{order.date}</TableCell>
-                <TableCell>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => {
-                        setSelectedOrder(order);
-                        setOrderDialogOpen(true);
-                      }}
-                    >
-                      <Eye className="w-4 h-4" />
-                    </Button>
-                    {order.status === 'pending' && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-green-600"
-                          onClick={() => handleOrderAction(order.id, 'approve')}
-                        >
-                          <CheckCircle className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-red-600"
-                          onClick={() => handleOrderAction(order.id, 'reject')}
-                        >
-                          <XCircle className="w-4 h-4" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
-  );
-
-  const renderUsers = () => (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <CardTitle>User Management</CardTitle>
-          <div className="flex gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <Input
-                placeholder="Search users..."
-                className="pl-10 w-64"
-              />
-            </div>
-            <Button variant="outline" size="icon">
-              <Download className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>User ID</TableHead>
-              <TableHead>Name</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Balance</TableHead>
-              <TableHead>KYC Status</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {users.map((user) => (
-              <TableRow key={user.id}>
-                <TableCell className="font-medium">{user.id}</TableCell>
-                <TableCell>{user.name}</TableCell>
-                <TableCell>{user.email}</TableCell>
-                <TableCell>{formatCurrency(user.balance)}</TableCell>
-                <TableCell>
-                  <Badge className={getStatusBadge(user.kycStatus)}>
-                    {user.kycStatus}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <Badge className={getStatusBadge(user.status)}>
-                    {user.status}
-                  </Badge>
-                </TableCell>
-                <TableCell>
-                  <div className="flex gap-2">
-                    <Button variant="ghost" size="icon">
-                      <Eye className="w-4 h-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon">
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    {user.status === 'active' ? (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-yellow-600"
-                        onClick={() => handleUserAction(user.id, 'suspend')}
-                      >
-                        <XCircle className="w-4 h-4" />
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-green-600"
-                        onClick={() => handleUserAction(user.id, 'activate')}
-                      >
-                        <CheckCircle className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
-  );
-
-  const renderTransactions = () => (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <CardTitle>Transaction History</CardTitle>
-          <div className="flex gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <Input
-                placeholder="Search transactions..."
-                className="pl-10 w-64"
-              />
-            </div>
-            <Button variant="outline" size="icon">
-              <Download className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Transaction ID</TableHead>
-              <TableHead>Reference</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Amount</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Date</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {transactions.map((trx) => (
-              <TableRow key={trx.id}>
-                <TableCell className="font-medium">{trx.id}</TableCell>
-                <TableCell>{trx.reference}</TableCell>
-                <TableCell>{trx.user}</TableCell>
-                <TableCell>{trx.type}</TableCell>
-                <TableCell>{formatCurrency(trx.amount)}</TableCell>
-                <TableCell>
-                  <Badge className={getStatusBadge(trx.status)}>
-                    {trx.status}
-                  </Badge>
-                </TableCell>
-                <TableCell>{trx.date}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+  const renderOrdersTable = (rows: OperationOrder[]) => (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Module</TableHead>
+          <TableHead>Customer</TableHead>
+          <TableHead>Reference</TableHead>
+          <TableHead>Amount</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Action</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((order) => (
+          <TableRow key={`${order.module}-${order.id}`}>
+            <TableCell className="font-semibold">{order.type}</TableCell>
+            <TableCell>{userName(order.user)}</TableCell>
+            <TableCell className="font-mono text-xs">{order.raw?.order_number || order.raw?.review?.reference || order.id}</TableCell>
+            <TableCell>{formatCurrency(order.amount)}</TableCell>
+            <TableCell><Badge className={statusClass(order.status)}>{order.status}</Badge></TableCell>
+            <TableCell>
+              <Button size="sm" variant="outline" onClick={() => setSelectedOrder(order)}>
+                View
+              </Button>
+              {['fuel', 'logistics'].includes(order.module) && (
+                <Button
+                  size="sm"
+                  className="ml-2"
+                  onClick={() => {
+                    setStatusDialog({ open: true, order: order.raw, module: order.module as 'fuel' | 'logistics' });
+                    setNextStatus(order.module === 'logistics' ? 'accepted' : 'accepted');
+                  }}
+                >
+                  Update
+                </Button>
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
-      {/* Sidebar */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-50 bg-white shadow-lg transition-transform duration-300 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } lg:translate-x-0 lg:static lg:w-64`}
-      >
-        <div className="h-full flex flex-col">
-          <div className="p-4 border-b">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-lg">N</span>
-              </div>
-              <div>
-                <h1 className="font-bold text-lg">Nadi Digital</h1>
-                <p className="text-xs text-gray-500">Admin Panel</p>
-              </div>
-            </div>
-          </div>
-
-          <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-            {sidebarItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-                    activeTab === item.id
-                      ? 'bg-orange-50 text-orange-600'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  <Icon className="w-5 h-5" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="p-4 border-t">
-            <button className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <LogOut className="w-5 h-5" />
-              <span>Logout</span>
-            </button>
-          </div>
+    <div className="min-h-screen bg-[#f8fafc]">
+      <aside className="fixed left-0 top-0 hidden h-full w-64 border-r border-slate-200 bg-white p-5 lg:block">
+        <div className="mb-8">
+          <p className="text-xs uppercase font-bold text-[#ea580c]">Nadi Digital</p>
+          <h1 className="text-xl font-black text-slate-900">Admin Console</h1>
         </div>
+        <nav className="space-y-1">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${activeTab === tab.id ? 'bg-[#ea580c] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+              >
+                <Icon className="h-4 w-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </nav>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 min-w-0">
-        {/* Header */}
-        <header className="bg-white border-b px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="lg:hidden p-2 hover:bg-gray-100 rounded-lg"
-              >
-                {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </button>
-              <h2 className="text-xl font-semibold capitalize">{activeTab}</h2>
-            </div>
-            <div className="flex items-center gap-4">
-              <button className="relative p-2 hover:bg-gray-100 rounded-lg">
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
-                  <span className="text-orange-600 font-semibold">A</span>
-                </div>
-                <div className="hidden md:block">
-                  <p className="font-medium">Admin User</p>
-                  <p className="text-sm text-gray-500">Super Admin</p>
-                </div>
-              </div>
-            </div>
+      <main className="lg:ml-64">
+        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
+          <div>
+            <h2 className="text-lg font-bold capitalize text-slate-900">{activeTab}</h2>
+            <p className="text-xs text-slate-500">{user?.email || 'Admin user'}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={loadAdminData} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              <LogOut className="h-4 w-4" />
+            </Button>
           </div>
         </header>
 
-        {/* Content */}
-        <div className="p-6">
-          {activeTab === 'dashboard' && renderDashboard()}
-          {activeTab === 'orders' && renderOrders()}
-          {activeTab === 'users' && renderUsers()}
-          {activeTab === 'transactions' && renderTransactions()}
-          {['giftcards', 'crypto', 'logistics', 'fuel', 'utilities'].includes(activeTab) && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="capitalize">{activeTab} Management</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-gray-500">This section is under development. Use the Orders tab to manage {activeTab} orders.</p>
-              </CardContent>
-            </Card>
-          )}
-          {activeTab === 'settings' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Admin Settings</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-gray-500">Settings configuration coming soon.</p>
-              </CardContent>
-            </Card>
-          )}
+        <div className="flex gap-2 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2 lg:hidden">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold ${activeTab === tab.id ? 'bg-[#ea580c] text-white' : 'bg-slate-100 text-slate-600'}`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
+
+        <section className="p-5 space-y-5">
+          {loading ? (
+            <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-slate-200 bg-white">
+              <RefreshCw className="h-7 w-7 animate-spin text-[#ea580c]" />
+            </div>
+          ) : (
+            <>
+              {activeTab === 'dashboard' && (
+                <div className="space-y-5">
+                  <div className="grid gap-4 md:grid-cols-4">
+                    {summaryCards.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <Card key={item.label}>
+                          <CardContent className="flex items-center justify-between p-5">
+                            <div>
+                              <p className="text-xs text-slate-500">{item.label}</p>
+                              <p className="mt-1 text-2xl font-black text-slate-900">{item.value}</p>
+                            </div>
+                            <Icon className="h-6 w-6 text-[#ea580c]" />
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                  <Card>
+                    <CardHeader><CardTitle>Recent Manual Operations</CardTitle></CardHeader>
+                    <CardContent>{renderOrdersTable(filteredOrders.slice(0, 8))}</CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {activeTab === 'orders' && (
+                <Card>
+                  <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <CardTitle>Manual Operations Queue</CardTitle>
+                    <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search orders..." className="max-w-sm" />
+                  </CardHeader>
+                  <CardContent>{renderOrdersTable(filteredOrders)}</CardContent>
+                </Card>
+              )}
+
+              {activeTab === 'giftcards' && (
+                <Card>
+                  <CardHeader><CardTitle>Gift Card Sell Reviews</CardTitle></CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Card</TableHead>
+                          <TableHead>Payout</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {giftCardSales.map((sale) => (
+                          <TableRow key={sale.id}>
+                            <TableCell>{userName(sale.user)}</TableCell>
+                            <TableCell>{sale.card_currency} {sale.card_value} {sale.card_type}</TableCell>
+                            <TableCell>{formatCurrency(sale.payout_amount)}</TableCell>
+                            <TableCell><Badge className={statusClass(sale.status)}>{sale.status}</Badge></TableCell>
+                            <TableCell className="flex gap-2">
+                              <Button size="sm" disabled={actionLoading || sale.status !== 'pending_review'} onClick={() => handleGiftCardDecision(sale.id, 'approve')}>
+                                <CheckCircle className="h-4 w-4" />
+                              </Button>
+                              <Button size="sm" variant="destructive" disabled={actionLoading || sale.status !== 'pending_review'} onClick={() => handleGiftCardDecision(sale.id, 'reject')}>
+                                <XCircle className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
+              {activeTab === 'fuel' && (
+                <Card>
+                  <CardHeader><CardTitle>Fuel & Gas Fulfillment</CardTitle></CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Reference</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Total</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {fuelOrders.map((order) => (
+                          <TableRow key={order.id}>
+                            <TableCell className="font-mono text-xs">{order.order_number}</TableCell>
+                            <TableCell>{userName(order.user)}</TableCell>
+                            <TableCell>{order.order_type}</TableCell>
+                            <TableCell>{formatCurrency(order.pricing?.total)}</TableCell>
+                            <TableCell><Badge className={statusClass(order.status)}>{order.status}</Badge></TableCell>
+                            <TableCell>
+                              <Button size="sm" variant="outline" onClick={() => {
+                                setStatusDialog({ open: true, order, module: 'fuel' });
+                                setNextStatus(order.status === 'pending' ? 'accepted' : 'dispatched');
+                              }}>
+                                Update
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
+              {activeTab === 'users' && (
+                <Card>
+                  <CardHeader><CardTitle>Users</CardTitle></CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                      <TableBody>{users.map((row) => <TableRow key={row.id}><TableCell>{row.first_name} {row.last_name}</TableCell><TableCell>{row.email}</TableCell><TableCell>{row.role || 'user'}</TableCell><TableCell>{row.is_active ? 'Active' : 'Inactive'}</TableCell></TableRow>)}</TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
+              {activeTab === 'transactions' && (
+                <Card>
+                  <CardHeader><CardTitle>Transactions</CardTitle></CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader><TableRow><TableHead>Reference</TableHead><TableHead>Category</TableHead><TableHead>Type</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                      <TableBody>{transactions.map((tx) => <TableRow key={tx.id}><TableCell className="font-mono text-xs">{tx.reference}</TableCell><TableCell>{tx.category}</TableCell><TableCell>{tx.type}</TableCell><TableCell>{formatCurrency(tx.amount)}</TableCell><TableCell><Badge className={statusClass(tx.status)}>{tx.status}</Badge></TableCell></TableRow>)}</TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
+              {activeTab === 'settings' && (
+                <Card>
+                  <CardHeader><CardTitle>Operational Settings</CardTitle></CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <Input
+                        type="number"
+                        value={settings.fuel?.fuel?.pms?.price || ''}
+                        onChange={(event) => setSettings((current: any) => ({
+                          ...current,
+                          fuel: { ...current.fuel, fuel: { ...current.fuel?.fuel, pms: { ...(current.fuel?.fuel?.pms || {}), price: Number(event.target.value) } } }
+                        }))}
+                        placeholder="PMS price"
+                      />
+                      <Input
+                        type="number"
+                        value={settings.fuel?.fuel?.ago?.price || ''}
+                        onChange={(event) => setSettings((current: any) => ({
+                          ...current,
+                          fuel: { ...current.fuel, fuel: { ...current.fuel?.fuel, ago: { ...(current.fuel?.fuel?.ago || {}), price: Number(event.target.value) } } }
+                        }))}
+                        placeholder="AGO price"
+                      />
+                      <Input
+                        type="number"
+                        value={settings.fuel?.deliveryFee || ''}
+                        onChange={(event) => setSettings((current: any) => ({
+                          ...current,
+                          fuel: { ...current.fuel, deliveryFee: Number(event.target.value) }
+                        }))}
+                        placeholder="Fuel delivery fee"
+                      />
+                    </div>
+                    <Button onClick={handleSettingsSave} disabled={actionLoading}>
+                      {actionLoading ? 'Saving...' : 'Save Settings'}
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          )}
+        </section>
       </main>
 
-      {/* Order Details Dialog */}
-      <Dialog open={orderDialogOpen} onOpenChange={setOrderDialogOpen}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Order Details</DialogTitle>
-            <DialogDescription>
-              Order ID: {selectedOrder?.id}
-            </DialogDescription>
+            <DialogTitle>Operation Details</DialogTitle>
+            <DialogDescription>{selectedOrder?.type} - {selectedOrder?.status}</DialogDescription>
           </DialogHeader>
-          {selectedOrder && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-gray-500">Type</p>
-                  <p className="font-medium">{selectedOrder.type}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Amount</p>
-                  <p className="font-medium">{formatCurrency(selectedOrder.amount)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">User</p>
-                  <p className="font-medium">{selectedOrder.user}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Date</p>
-                  <p className="font-medium">{selectedOrder.date}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Status</p>
-                  <Badge className={getStatusBadge(selectedOrder.status)}>
-                    {selectedOrder.status}
-                  </Badge>
-                </div>
-              </div>
-              <div>
-                <p className="text-sm text-gray-500 mb-2">Order Details</p>
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  <pre className="text-sm overflow-x-auto">
-                    {JSON.stringify(selectedOrder.details, null, 2)}
-                  </pre>
-                </div>
-              </div>
-            </div>
-          )}
-          <DialogFooter className="gap-2">
-            {selectedOrder?.status === 'pending' && (
-              <>
-                <Button
-                  variant="outline"
-                  className="text-red-600"
-                  onClick={() => handleOrderAction(selectedOrder.id, 'reject')}
-                >
-                  <XCircle className="w-4 h-4 mr-2" />
-                  Reject
-                </Button>
-                <Button
-                  className="bg-orange-500 hover:bg-orange-600"
-                  onClick={() => handleOrderAction(selectedOrder.id, 'process')}
-                >
-                  <Clock className="w-4 h-4 mr-2" />
-                  Process
-                </Button>
-                <Button
-                  className="bg-green-500 hover:bg-green-600"
-                  onClick={() => handleOrderAction(selectedOrder.id, 'approve')}
-                >
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  Approve
-                </Button>
-              </>
-            )}
+          <pre className="max-h-[420px] overflow-auto rounded-xl bg-slate-950 p-4 text-xs text-slate-50">
+            {JSON.stringify(selectedOrder?.raw || {}, null, 2)}
+          </pre>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={statusDialog.open} onOpenChange={(open) => setStatusDialog({ open, order: statusDialog.order, module: statusDialog.module })}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update {statusDialog.module === 'logistics' ? 'Delivery' : 'Fuel'} Order</DialogTitle>
+            <DialogDescription>Move this order through the fulfillment workflow.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Select value={nextStatus} onValueChange={setNextStatus}>
+              <SelectTrigger><SelectValue placeholder="Choose status" /></SelectTrigger>
+              <SelectContent>
+                {statusDialog.module === 'logistics' ? (
+                  <>
+                    <SelectItem value="accepted">Accepted</SelectItem>
+                    <SelectItem value="picked_up">Picked Up</SelectItem>
+                    <SelectItem value="in_transit">In Transit</SelectItem>
+                    <SelectItem value="delivered">Delivered</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                  </>
+                ) : (
+                  <>
+                    <SelectItem value="accepted">Accepted</SelectItem>
+                    <SelectItem value="dispatched">Dispatched</SelectItem>
+                    <SelectItem value="delivered">Delivered</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                  </>
+                )}
+              </SelectContent>
+            </Select>
+            <Input value={adminNote} onChange={(event) => setAdminNote(event.target.value)} placeholder="Internal note or proof reference" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStatusDialog({ open: false })}>Cancel</Button>
+            <Button onClick={handleManualStatus} disabled={actionLoading}>{actionLoading ? 'Saving...' : 'Update Status'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

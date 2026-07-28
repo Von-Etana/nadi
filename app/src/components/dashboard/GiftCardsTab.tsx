@@ -118,7 +118,7 @@ export const GiftCardsTab = () => {
         currency: buyCurrency
       });
       if (res.data && res.data.success) {
-        setBuySuccess(res.data.message || 'Gift card purchase request submitted successfully!');
+        setBuySuccess(res.data.message || 'Gift card purchased successfully.');
         setBuyAmount('');
       } else {
         setBuyError(res.error || 'Failed to purchase gift card');
@@ -346,7 +346,7 @@ export const GiftCardsTab = () => {
             <div className="bg-white rounded-3xl p-6 border border-[#e2e2e2]/60 shadow-sm self-start space-y-6">
               <div>
                 <h3 className="text-lg font-bold text-[#1a1a1a]">Purchase Card</h3>
-                <p className="text-xs text-[#999]">Enter values to purchase gift voucher</p>
+            <p className="text-xs text-[#999]">Select a live provider product and pay from your wallet</p>
               </div>
 
               {buyCardType && (
@@ -415,10 +415,9 @@ export const GiftCardsTab = () => {
                   </div>
                 </div>
 
-                {/* Coming Soon Notice */}
-                <div className="bg-orange-50 border border-orange-200 text-orange-800 text-[10px] p-3 rounded-lg flex gap-2">
+                <div className="bg-blue-50 border border-blue-200 text-blue-800 text-[10px] p-3 rounded-lg flex gap-2">
                   <AlertCircle className="w-4 h-4 text-orange-600 flex-shrink-0" />
-                  <p>Gift card purchasing is currently mocked. Submitting will test the connection but won't deliver live codes.</p>
+                  <p>Purchases are issued through the connected gift-card provider. If provider fulfillment fails, your wallet is refunded.</p>
                 </div>
 
                 <Button
@@ -439,7 +438,7 @@ export const GiftCardsTab = () => {
         <div className="bg-white rounded-3xl p-6 border border-[#e2e2e2]/60 shadow-sm space-y-6">
           <div>
             <h3 className="text-lg font-bold text-[#1a1a1a]">Sell Gift Card</h3>
-            <p className="text-xs text-[#999]">Submit card codes to trade for Naira instantly</p>
+            <p className="text-xs text-[#999]">Submit card details for admin review and wallet payout</p>
           </div>
 
           {sellSuccess && (
@@ -577,10 +576,9 @@ export const GiftCardsTab = () => {
                 </div>
               </div>
 
-              {/* Coming Soon Notice */}
               <div className="bg-orange-50 border border-orange-200 text-orange-800 text-[10px] p-3 rounded-lg flex gap-2">
                 <AlertCircle className="w-4 h-4 text-orange-600 flex-shrink-0" />
-                <p>Selling requires admin review. The request will register on the backend, but payouts are processed during development testing.</p>
+                <p>Selling requires admin review. Approved cards are paid directly into your wallet.</p>
               </div>
 
               <Button

@@ -164,7 +164,7 @@ router.get('/preferences', auth, async (req, res) => {
       preferences = newPrefs;
     }
 
-    res.json({ success: true, preferences });
+    res.json({ success: true, preferences: preferences.preferences || preferences });
   } catch (error) {
     logger.error('Get preferences error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch preferences' });
@@ -176,10 +176,11 @@ router.get('/preferences', auth, async (req, res) => {
 // @access  Private
 router.put('/preferences', auth, async (req, res) => {
   try {
+    const nextPreferences = req.body.preferences || req.body;
     const { data: preferences, error } = await supabase
       .from('notification_preferences')
       .update({
-        ...req.body,
+        preferences: nextPreferences,
         updated_at: new Date().toISOString()
       })
       .eq('user_id', req.user.id)
@@ -188,7 +189,7 @@ router.put('/preferences', auth, async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ success: true, message: 'Preferences updated', preferences });
+    res.json({ success: true, message: 'Preferences updated', preferences: preferences?.preferences || nextPreferences });
   } catch (error) {
     logger.error('Update preferences error:', error);
     res.status(500).json({ success: false, message: 'Failed to update preferences' });

@@ -169,6 +169,10 @@ export const authApi = {
   async disable2FA(code: string) {
     return httpClient.post('/auth/2fa/disable', { code });
   },
+
+  async updateTransactionPin(data: { currentPin?: string; newPin: string }) {
+    return httpClient.post('/auth/transaction-pin', data);
+  },
 };
 
 // Wallet API
@@ -259,7 +263,10 @@ export const utilitiesApi = {
     provider: string;
     smartCardNumber: string;
   }) {
-    return httpClient.post('/utilities/validate-decoder', data);
+    return httpClient.post('/utilities/validate-meter', {
+      provider: data.provider,
+      meterNumber: data.smartCardNumber
+    });
   },
 
   async payBill(data: {
@@ -445,12 +452,13 @@ export const fuelApi = {
 
   async createOrder(data: {
     type: 'fuel' | 'gas';
-    fuelType?: 'pms' | 'ago';
-    cylinderSize?: string;
+    subtype: 'pms' | 'ago' | string;
     quantity: number;
     deliveryAddress: string;
     phoneNumber: string;
-    notes?: string;
+    priority?: 'normal' | 'high';
+    scheduledDate?: string;
+    customerNotes?: string;
   }) {
     return httpClient.post('/fuel/orders', data);
   },
@@ -558,12 +566,49 @@ export const adminApi = {
   },
 
   // Gift Cards
+  async getGiftCardSales(params?: { status?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return httpClient.get(`/admin/giftcards/sales?${query}`);
+  },
+
   async updateGiftCardRate(cardType: string, rate: number) {
     return httpClient.put(`/admin/giftcards/rates/${cardType}`, { rate });
   },
 
   async approveGiftCardSale(id: string) {
     return httpClient.post(`/admin/giftcards/sales/${id}/approve`, {});
+  },
+
+  async rejectGiftCardSale(id: string, reason?: string) {
+    return httpClient.post(`/admin/giftcards/sales/${id}/reject`, { reason });
+  },
+
+  async getOperationOrders() {
+    return httpClient.get('/admin/orders');
+  },
+
+  async getFuelOrders(params?: { status?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return httpClient.get(`/admin/fuel/orders?${query}`);
+  },
+
+  async updateFuelOrderStatus(id: string, data: { status: string; note?: string; assignedTo?: string; proofUrl?: string }) {
+    return httpClient.patch(`/admin/fuel/orders/${id}/status`, data);
+  },
+
+  async assignShipment(id: string, data: { assignedTo: string; note?: string }) {
+    return httpClient.post(`/logistics/shipments/${id}/assign`, {
+      assignedTo: data.assignedTo,
+      notes: data.note
+    });
+  },
+
+  async updateShipmentStatus(id: string, data: { status: string; note?: string; proofUrl?: string }) {
+    return httpClient.patch(`/logistics/shipments/${id}/status`, {
+      status: data.status,
+      notes: data.note,
+      proof: data.proofUrl ? { proofUrl: data.proofUrl } : undefined
+    });
   },
 
   // Settings

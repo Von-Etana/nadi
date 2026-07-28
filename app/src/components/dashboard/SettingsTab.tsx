@@ -38,6 +38,14 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
+  const [pinPanelOpen, setPinPanelOpen] = useState(false);
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinSuccess, setPinSuccess] = useState<string | null>(null);
+
   // Two-factor authentication state
   const [twoFactorMode, setTwoFactorMode] = useState<'idle' | 'setup' | 'disable'>('idle');
   const [twoFactorLoading, setTwoFactorLoading] = useState(false);
@@ -101,6 +109,11 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
 
       if (res.data && res.data.success) {
         setProfileSuccess('Profile changes saved successfully!');
+        if (res.data.user) {
+          updateUser(res.data.user);
+        } else {
+          updateUser({ firstName, lastName, phone });
+        }
       } else {
         setProfileError(res.error || 'Failed to update profile info.');
       }
@@ -175,6 +188,43 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
     setTwoFactorSecret('');
     setTwoFactorQrCode('');
     setTwoFactorError(null);
+  };
+
+  const handleUpdateTransactionPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinError(null);
+    setPinSuccess(null);
+
+    if (!/^\d{4}$/.test(newPin)) {
+      setPinError('Transaction PIN must be exactly 4 digits.');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setPinError('PIN confirmation does not match.');
+      return;
+    }
+
+    try {
+      setPinLoading(true);
+      const res = await authApi.updateTransactionPin({
+        currentPin: currentPin || undefined,
+        newPin
+      });
+
+      if (res.error || !res.data?.success) {
+        setPinError(res.error || 'Failed to update transaction PIN.');
+        return;
+      }
+
+      setPinSuccess(res.data.message || 'Transaction PIN updated successfully.');
+      setCurrentPin('');
+      setNewPin('');
+      setConfirmPin('');
+    } catch (err) {
+      setPinError(err instanceof Error ? err.message : 'Failed to update transaction PIN.');
+    } finally {
+      setPinLoading(false);
+    }
   };
 
   const handleStart2FASetup = async () => {
@@ -422,7 +472,11 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
             
             <button
               type="button"
-              onClick={() => toast.info('Transaction PIN controls are managed through your wallet security flow.')}
+              onClick={() => {
+                setPinPanelOpen(!pinPanelOpen);
+                setPinError(null);
+                setPinSuccess(null);
+              }}
               className="w-full flex items-center justify-between p-3.5 rounded-xl border border-[#e2e2e2]/60 hover:border-[#ea580c] transition-all bg-[#fcfcfc] text-left"
             >
               <div className="flex items-center gap-3">
@@ -434,6 +488,58 @@ export const SettingsTab = ({ user }: SettingsTabProps) => {
               </div>
               <ChevronRight className="w-4 h-4 text-[#999]" />
             </button>
+
+            {pinPanelOpen && (
+              <form onSubmit={handleUpdateTransactionPin} className="rounded-2xl border border-[#e2e2e2]/70 bg-[#fcfcfc] p-4 space-y-3">
+                {pinSuccess && (
+                  <div className="bg-green-50 border border-green-200 text-green-700 text-xs p-3 rounded-xl flex gap-2">
+                    <Check className="w-4 h-4 flex-shrink-0" />
+                    <p>{pinSuccess}</p>
+                  </div>
+                )}
+                {pinError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 text-xs p-3 rounded-xl flex gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <p>{pinError}</p>
+                  </div>
+                )}
+                <div className="grid sm:grid-cols-3 gap-2">
+                  <Input
+                    value={currentPin}
+                    onChange={(event) => setCurrentPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="Current"
+                    inputMode="numeric"
+                    maxLength={4}
+                    className="h-11 rounded-xl text-center tracking-[0.4em] font-mono"
+                  />
+                  <Input
+                    value={newPin}
+                    onChange={(event) => setNewPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="New"
+                    inputMode="numeric"
+                    maxLength={4}
+                    className="h-11 rounded-xl text-center tracking-[0.4em] font-mono"
+                    required
+                  />
+                  <Input
+                    value={confirmPin}
+                    onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="Confirm"
+                    inputMode="numeric"
+                    maxLength={4}
+                    className="h-11 rounded-xl text-center tracking-[0.4em] font-mono"
+                    required
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  disabled={pinLoading}
+                  className="w-full h-11 rounded-xl bg-gradient-primary text-white"
+                >
+                  {pinLoading ? 'Saving PIN...' : 'Save Transaction PIN'}
+                </Button>
+              </form>
+            )}
 
             <button
               type="button"
