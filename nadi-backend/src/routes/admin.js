@@ -3,6 +3,7 @@ const router = express.Router();
 
 const supabase = require('../utils/supabase');
 const { auth, authorize } = require('../middleware/auth');
+const { createNotification } = require('../services/notification');
 const logger = require('../utils/logger');
 
 const DEFAULT_OPERATIONAL_SETTINGS = {
@@ -73,6 +74,15 @@ function appendTrackingLog(entity, status, message, actorId, note) {
         timestamp: new Date().toISOString()
       }
     ]
+  };
+}
+
+function sanitizeSupportTicket(ticket) {
+  if (!ticket) return ticket;
+  return {
+    ...ticket,
+    user: ticket.user || null,
+    reply_count: Array.isArray(ticket.replies) ? ticket.replies.length : 0
   };
 }
 
@@ -604,6 +614,151 @@ router.patch('/fuel/orders/:id/status', async (req, res) => {
   } catch (error) {
     logger.error('Admin update fuel order status error:', error);
     res.status(500).json({ success: false, message: 'Failed to update fuel order status' });
+  }
+});
+
+router.get('/support/tickets', async (req, res) => {
+  try {
+    const { status, priority, category, search, limit = 100 } = req.query;
+    let query = supabase
+      .from('support_tickets')
+      .select('*, user:users(first_name,last_name,email,phone)')
+      .order('updated_at', { ascending: false })
+      .limit(Number(limit) || 100);
+
+    if (status && status !== 'all') query = query.eq('status', status);
+    if (priority && priority !== 'all') query = query.eq('priority', priority);
+    if (category && category !== 'all') query = query.eq('category', category);
+    if (search) {
+      const needle = String(search).replaceAll(',', ' ');
+      query = query.or(`reference.ilike.%${needle}%,subject.ilike.%${needle}%,message.ilike.%${needle}%`);
+    }
+
+    const { data: tickets, error } = await query;
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      tickets: (tickets || []).map(sanitizeSupportTicket)
+    });
+  } catch (error) {
+    logger.error('Admin get support tickets error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch support tickets' });
+  }
+});
+
+router.patch('/support/tickets/:id', async (req, res) => {
+  try {
+    const allowedStatuses = ['open', 'in_progress', 'waiting_customer', 'resolved', 'closed'];
+    const allowedPriorities = ['low', 'normal', 'high', 'urgent'];
+    const updates = {};
+
+    if (req.body.status) {
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(400).json({ success: false, message: 'Invalid support ticket status' });
+      }
+      updates.status = req.body.status;
+      if (req.body.status === 'closed') updates.closed_at = new Date().toISOString();
+    }
+
+    if (req.body.priority) {
+      if (!allowedPriorities.includes(req.body.priority)) {
+        return res.status(400).json({ success: false, message: 'Invalid support ticket priority' });
+      }
+      updates.priority = req.body.priority;
+    }
+
+    if (req.body.assignedTo !== undefined) updates.assigned_to = String(req.body.assignedTo || '').trim() || null;
+    if (req.body.adminNotes !== undefined) updates.admin_notes = String(req.body.adminNotes || '').trim() || null;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, message: 'No ticket updates provided' });
+    }
+
+    updates.updated_at = new Date().toISOString();
+
+    const { data: ticket, error } = await supabase
+      .from('support_tickets')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select('*, user:users(first_name,last_name,email,phone)')
+      .maybeSingle();
+
+    if (error || !ticket) {
+      return res.status(404).json({ success: false, message: 'Support ticket not found' });
+    }
+
+    await createNotification({
+      user_id: ticket.user_id,
+      type: 'support',
+      title: 'Support Ticket Updated',
+      message: `Your support ticket ${ticket.reference} is now ${ticket.status.replaceAll('_', ' ')}.`,
+      related_to: { table: 'support_tickets', id: ticket.id }
+    }).catch(err => logger.error('Support ticket update notification error:', err));
+
+    res.json({ success: true, message: 'Support ticket updated', ticket: sanitizeSupportTicket(ticket) });
+  } catch (error) {
+    logger.error('Admin update support ticket error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update support ticket' });
+  }
+});
+
+router.post('/support/tickets/:id/reply', async (req, res) => {
+  try {
+    const message = String(req.body.message || '').trim();
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Reply message is required' });
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (existingError || !existing) {
+      return res.status(404).json({ success: false, message: 'Support ticket not found' });
+    }
+
+    const replies = Array.isArray(existing.replies) ? existing.replies : [];
+    const nextReplies = [
+      ...replies,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+        authorId: req.user.id,
+        authorName: req.user.email || 'Admin',
+        authorType: 'admin',
+        message,
+        createdAt: new Date().toISOString()
+      }
+    ];
+
+    const { data: ticket, error } = await supabase
+      .from('support_tickets')
+      .update({
+        replies: nextReplies,
+        status: req.body.status || 'waiting_customer',
+        assigned_to: req.body.assignedTo || existing.assigned_to || req.user.email || req.user.id,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', existing.id)
+      .select('*, user:users(first_name,last_name,email,phone)')
+      .single();
+
+    if (error) throw error;
+
+    await createNotification({
+      user_id: ticket.user_id,
+      type: 'support',
+      title: 'Support Replied',
+      message: `Support replied to ticket ${ticket.reference}.`,
+      related_to: { table: 'support_tickets', id: ticket.id }
+    }).catch(err => logger.error('Support reply notification error:', err));
+
+    res.json({ success: true, message: 'Support reply sent', ticket: sanitizeSupportTicket(ticket) });
+  } catch (error) {
+    logger.error('Admin reply support ticket error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reply to support ticket' });
   }
 });
 

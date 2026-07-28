@@ -1,32 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle,
-  Clock,
   Fuel,
   Gift,
+  Headphones,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Package,
   RefreshCw,
+  Search,
   Settings,
+  ShieldCheck,
+  Truck,
   Users,
   Wallet,
   XCircle
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from '@/components/ui/table';
 import {
   Dialog,
   DialogContent,
@@ -35,6 +30,9 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -42,30 +40,85 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-import { adminApi } from '@/services/api';
+import { Switch } from '@/components/ui/switch';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
+import { adminApi } from '@/services/api';
 
-type AdminTab = 'dashboard' | 'orders' | 'giftcards' | 'fuel' | 'users' | 'transactions' | 'settings';
-
+type AdminTab = 'dashboard' | 'operations' | 'support' | 'giftcards' | 'delivery' | 'fuel' | 'users' | 'transactions' | 'settings';
+type ManualModule = 'giftcards' | 'logistics' | 'fuel';
+type UserSummary = {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+};
 type OperationOrder = {
   id: string;
-  module: 'giftcards' | 'logistics' | 'fuel';
+  module: ManualModule;
   type: string;
   status: string;
   amount: number;
   created_at: string;
-  user?: {
-    first_name?: string;
-    last_name?: string;
-    email?: string;
-    phone?: string;
-  };
-  raw: any;
+  user?: UserSummary;
+  raw: Record<string, unknown>;
+};
+type SupportTicket = {
+  id: string;
+  reference: string;
+  subject: string;
+  message: string;
+  category: string;
+  priority: string;
+  status: string;
+  assigned_to?: string | null;
+  admin_notes?: string | null;
+  replies?: Array<{ authorType?: string; message?: string; createdAt?: string }>;
+  reply_count?: number;
+  created_at: string;
+  updated_at: string;
+  user?: UserSummary;
+};
+type AdminUser = UserSummary & {
+  id: string;
+  role?: string;
+  is_active?: boolean;
+  kyc_status?: string;
+  account_type?: string;
+  created_at?: string;
+};
+type TransactionRow = {
+  id: string;
+  reference?: string;
+  category?: string;
+  type?: string;
+  amount?: number;
+  status?: string;
+  created_at?: string;
+  user?: UserSummary;
 };
 
 const formatCurrency = (value?: number) => `NGN ${Number(value || 0).toLocaleString()}`;
 
-const userName = (user?: OperationOrder['user']) => {
+const formatDate = (value?: string) => {
+  if (!value) return 'Not available';
+  return new Intl.DateTimeFormat('en-NG', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
+};
+
+const userName = (user?: UserSummary) => {
   if (!user) return 'Unknown user';
   const fullName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
   return fullName || user.email || user.phone || 'Unknown user';
@@ -76,45 +129,72 @@ const statusClass = (status?: string) => {
     case 'completed':
     case 'approved':
     case 'delivered':
-      return 'bg-green-50 text-green-700 border-green-200';
+    case 'resolved':
+    case 'closed':
+    case 'verified':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
     case 'pending':
     case 'pending_review':
     case 'accepted':
     case 'dispatched':
     case 'in_transit':
-      return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'open':
+    case 'waiting_customer':
+    case 'in_progress':
+    case 'in_review':
+      return 'border-amber-200 bg-amber-50 text-amber-700';
     case 'cancelled':
     case 'rejected':
     case 'failed':
-      return 'bg-red-50 text-red-700 border-red-200';
+    case 'urgent':
+      return 'border-red-200 bg-red-50 text-red-700';
     default:
-      return 'bg-slate-50 text-slate-700 border-slate-200';
+      return 'border-slate-200 bg-slate-50 text-slate-700';
   }
 };
+
+const priorityClass = (priority?: string) => {
+  if (priority === 'urgent' || priority === 'high') return 'border-red-200 bg-red-50 text-red-700';
+  if (priority === 'normal') return 'border-blue-200 bg-blue-50 text-blue-700';
+  return 'border-slate-200 bg-slate-50 text-slate-700';
+};
+
+const rawValue = (row: Record<string, unknown>, key: string) => row[key] as string | number | undefined;
 
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [stats, setStats] = useState<any>({});
+  const [stats, setStats] = useState<Record<string, number>>({});
   const [orders, setOrders] = useState<OperationOrder[]>([]);
-  const [giftCardSales, setGiftCardSales] = useState<any[]>([]);
-  const [fuelOrders, setFuelOrders] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [settings, setSettings] = useState<any>({});
+  const [giftCardSales, setGiftCardSales] = useState<Record<string, unknown>[]>([]);
+  const [fuelOrders, setFuelOrders] = useState<Record<string, unknown>[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [settings, setSettings] = useState<Record<string, any>>({});
+  const [search, setSearch] = useState('');
+  const [operationFilter, setOperationFilter] = useState<'all' | ManualModule>('all');
+  const [supportFilter, setSupportFilter] = useState('all');
+  const [userFilter, setUserFilter] = useState('all');
   const [selectedOrder, setSelectedOrder] = useState<OperationOrder | null>(null);
-  const [statusDialog, setStatusDialog] = useState<{ open: boolean; order?: any; module?: 'fuel' | 'logistics' }>({ open: false });
+  const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(null);
+  const [supportReply, setSupportReply] = useState('');
+  const [supportNote, setSupportNote] = useState('');
+  const [statusDialog, setStatusDialog] = useState<{ open: boolean; order?: Record<string, unknown>; module?: 'fuel' | 'logistics' }>({ open: false });
   const [nextStatus, setNextStatus] = useState('accepted');
   const [adminNote, setAdminNote] = useState('');
-  const [search, setSearch] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
+  const [proofUrl, setProofUrl] = useState('');
   const { logout, user } = useAuth();
   const navigate = useNavigate();
 
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'orders', label: 'Operations', icon: Package },
+    { id: 'operations', label: 'Operations', icon: Package },
+    { id: 'support', label: 'Support', icon: Headphones },
     { id: 'giftcards', label: 'Gift Cards', icon: Gift },
+    { id: 'delivery', label: 'Delivery', icon: Truck },
     { id: 'fuel', label: 'Fuel & Gas', icon: Fuel },
     { id: 'users', label: 'Users', icon: Users },
     { id: 'transactions', label: 'Transactions', icon: Wallet },
@@ -131,15 +211,17 @@ const AdminDashboard = () => {
         fuelRes,
         usersRes,
         txRes,
-        settingsRes
+        settingsRes,
+        supportRes
       ] = await Promise.all([
         adminApi.getDashboardStats(),
         adminApi.getOperationOrders(),
         adminApi.getGiftCardSales(),
         adminApi.getFuelOrders(),
-        adminApi.getUsers({ limit: 50 }),
-        adminApi.getTransactions({ limit: 50 }),
-        adminApi.getSettings()
+        adminApi.getUsers({ limit: 75 }),
+        adminApi.getTransactions({ limit: 75 }),
+        adminApi.getSettings(),
+        adminApi.getSupportTickets({ limit: 75 })
       ]);
 
       setStats(statsRes.data?.stats || {});
@@ -149,6 +231,7 @@ const AdminDashboard = () => {
       setUsers(usersRes.data?.users || []);
       setTransactions(txRes.data?.transactions || []);
       setSettings(settingsRes.data?.settings || {});
+      setSupportTickets(supportRes.data?.tickets || []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load admin data');
     } finally {
@@ -160,18 +243,65 @@ const AdminDashboard = () => {
     loadAdminData();
   }, []);
 
-  const filteredOrders = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return orders;
-    return orders.filter((order) => [
+  const searchText = search.trim().toLowerCase();
+
+  const filteredOrders = useMemo(() => orders.filter((order) => {
+    if (operationFilter !== 'all' && order.module !== operationFilter) return false;
+    if (!searchText) return true;
+    return [
       order.type,
       order.module,
       order.status,
       userName(order.user),
-      order.raw?.order_number,
-      order.raw?.card_type
-    ].some((value) => String(value || '').toLowerCase().includes(needle)));
-  }, [orders, search]);
+      rawValue(order.raw, 'order_number'),
+      rawValue(order.raw, 'card_type')
+    ].some((value) => String(value || '').toLowerCase().includes(searchText));
+  }), [orders, operationFilter, searchText]);
+
+  const deliveryOrders = useMemo(() => orders.filter((order) => order.module === 'logistics'), [orders]);
+
+  const filteredTickets = useMemo(() => supportTickets.filter((ticket) => {
+    if (supportFilter !== 'all' && ticket.status !== supportFilter) return false;
+    if (!searchText) return true;
+    return [
+      ticket.reference,
+      ticket.subject,
+      ticket.message,
+      ticket.category,
+      ticket.priority,
+      userName(ticket.user)
+    ].some((value) => String(value || '').toLowerCase().includes(searchText));
+  }), [supportTickets, searchText, supportFilter]);
+
+  const filteredUsers = useMemo(() => users.filter((row) => {
+    if (userFilter === 'active' && !row.is_active) return false;
+    if (userFilter === 'inactive' && row.is_active) return false;
+    if (userFilter === 'kyc_pending' && row.kyc_status !== 'pending' && row.kyc_status !== 'in_review') return false;
+    if (!searchText) return true;
+    return [
+      row.first_name,
+      row.last_name,
+      row.email,
+      row.phone,
+      row.role,
+      row.kyc_status
+    ].some((value) => String(value || '').toLowerCase().includes(searchText));
+  }), [users, searchText, userFilter]);
+
+  const openSupportCount = supportTickets.filter((ticket) => ['open', 'in_progress', 'waiting_customer'].includes(ticket.status)).length;
+  const pendingOpsCount = orders.filter((order) => ['pending', 'pending_review', 'accepted', 'dispatched', 'in_transit', 'open'].includes(order.status)).length;
+  const pendingGiftCards = giftCardSales.filter((sale) => sale.status === 'pending_review').length;
+  const activeFuelOrders = fuelOrders.filter((order) => ['pending', 'accepted', 'dispatched'].includes(String(order.status))).length;
+  const activeDeliveryOrders = deliveryOrders.filter((order) => ['pending', 'accepted', 'picked_up', 'in_transit'].includes(order.status)).length;
+  const completedTransactions = transactions.filter((tx) => tx.status === 'completed').length;
+  const completionRate = transactions.length ? Math.round((completedTransactions / transactions.length) * 100) : 0;
+
+  const summaryCards = [
+    { label: 'Customers', value: stats.totalUsers || users.length, detail: `${stats.activeUsers || users.filter((row) => row.is_active).length} active`, icon: Users },
+    { label: 'Manual Ops', value: pendingOpsCount, detail: `${activeDeliveryOrders} delivery, ${activeFuelOrders} fuel`, icon: Package },
+    { label: 'Support Queue', value: openSupportCount, detail: `${supportTickets.filter((ticket) => ticket.priority === 'urgent').length} urgent`, icon: Headphones },
+    { label: 'Monthly Revenue', value: formatCurrency(stats.monthlyRevenue || 0), detail: `${completionRate}% recent completion`, icon: CheckCircle }
+  ];
 
   const handleLogout = async () => {
     await logout();
@@ -185,7 +315,7 @@ const AdminDashboard = () => {
         await adminApi.approveGiftCardSale(id);
         toast.success('Gift card sale approved and wallet credited');
       } else {
-        await adminApi.rejectGiftCardSale(id, adminNote || 'Rejected by admin');
+        await adminApi.rejectGiftCardSale(id, adminNote || 'Card could not be verified');
         toast.success('Gift card sale rejected');
       }
       setAdminNote('');
@@ -197,38 +327,100 @@ const AdminDashboard = () => {
     }
   };
 
+  const openStatusDialog = (order: Record<string, unknown>, module: 'fuel' | 'logistics') => {
+    setStatusDialog({ open: true, order, module });
+    setNextStatus(module === 'logistics' ? 'accepted' : 'accepted');
+    setAssignedTo(String(order.assigned_to || order.assigned_driver || ''));
+    setAdminNote('');
+    setProofUrl('');
+  };
+
   const handleManualStatus = async () => {
-    if (!statusDialog.order) return;
+    if (!statusDialog.order?.id) return;
     try {
       setActionLoading(true);
+      const orderId = String(statusDialog.order.id);
       if (statusDialog.module === 'logistics') {
-        if (nextStatus === 'accepted' && !statusDialog.order.assigned_to) {
-          await adminApi.assignShipment(statusDialog.order.id, {
-            assignedTo: user?.email || user?.id || 'admin',
+        if (nextStatus === 'accepted') {
+          await adminApi.assignShipment(orderId, {
+            assignedTo: assignedTo || user?.email || user?.id || 'admin',
             note: adminNote || undefined
           });
         } else {
-          await adminApi.updateShipmentStatus(statusDialog.order.id, {
+          await adminApi.updateShipmentStatus(orderId, {
             status: nextStatus,
-            note: adminNote || undefined
+            note: adminNote || undefined,
+            proofUrl: proofUrl || undefined
           });
         }
         toast.success('Delivery status updated');
       } else {
-        await adminApi.updateFuelOrderStatus(statusDialog.order.id, {
+        await adminApi.updateFuelOrderStatus(orderId, {
           status: nextStatus,
-          note: adminNote || undefined
+          note: adminNote || undefined,
+          assignedTo: assignedTo || undefined,
+          proofUrl: proofUrl || undefined
         });
         toast.success('Fuel order status updated');
       }
       setStatusDialog({ open: false });
-      setAdminNote('');
       await loadAdminData();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update fuel order');
+      toast.error(err instanceof Error ? err.message : 'Failed to update order');
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleTicketUpdate = async (ticket: SupportTicket, updates: { status?: string; priority?: string; assignedTo?: string; adminNotes?: string }) => {
+    try {
+      setActionLoading(true);
+      const res = await adminApi.updateSupportTicket(ticket.id, updates);
+      setSelectedTicket(res.data?.ticket || null);
+      toast.success('Support ticket updated');
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update ticket');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleTicketReply = async () => {
+    if (!selectedTicket || !supportReply.trim()) return;
+    try {
+      setActionLoading(true);
+      const res = await adminApi.replySupportTicket(selectedTicket.id, {
+        message: supportReply.trim(),
+        status: 'waiting_customer',
+        assignedTo: selectedTicket.assigned_to || user?.email || user?.id
+      });
+      setSelectedTicket(res.data?.ticket || null);
+      setSupportReply('');
+      toast.success('Reply sent to customer');
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to send reply');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleUserUpdate = async (row: AdminUser, updates: { isActive?: boolean; kycStatus?: string; role?: string }) => {
+    try {
+      setActionLoading(true);
+      await adminApi.updateUser(row.id, updates);
+      toast.success('User updated');
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update user');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const updateSettingsPath = (section: string, value: unknown) => {
+    setSettings((current) => ({ ...current, [section]: value }));
   };
 
   const handleSettingsSave = async () => {
@@ -238,20 +430,13 @@ const AdminDashboard = () => {
       toast.success('Settings saved');
       await loadAdminData();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save settings');
+      toast.error(err instanceof Error ? err.message : 'Failed to save settings. Super admin access may be required.');
     } finally {
       setActionLoading(false);
     }
   };
 
-  const summaryCards = [
-    { label: 'Users', value: stats.totalUsers || users.length, icon: Users },
-    { label: 'Transactions', value: stats.totalTransactions || transactions.length, icon: Wallet },
-    { label: 'Pending Ops', value: orders.filter((order) => ['pending', 'pending_review', 'accepted', 'dispatched'].includes(order.status)).length, icon: Clock },
-    { label: 'Monthly Revenue', value: formatCurrency(stats.monthlyRevenue || 0), icon: CheckCircle }
-  ];
-
-  const renderOrdersTable = (rows: OperationOrder[]) => (
+  const renderOperationsTable = (rows: OperationOrder[]) => (
     <Table>
       <TableHeader>
         <TableRow>
@@ -260,32 +445,29 @@ const AdminDashboard = () => {
           <TableHead>Reference</TableHead>
           <TableHead>Amount</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead>Action</TableHead>
+          <TableHead>Updated</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {rows.map((order) => (
           <TableRow key={`${order.module}-${order.id}`}>
-            <TableCell className="font-semibold">{order.type}</TableCell>
+            <TableCell>
+              <div className="font-semibold text-slate-900">{order.type}</div>
+              <div className="text-xs text-slate-500">{order.module}</div>
+            </TableCell>
             <TableCell>{userName(order.user)}</TableCell>
-            <TableCell className="font-mono text-xs">{order.raw?.order_number || order.raw?.review?.reference || order.id}</TableCell>
+            <TableCell className="font-mono text-xs">{rawValue(order.raw, 'order_number') || rawValue(order.raw, 'reference') || order.id}</TableCell>
             <TableCell>{formatCurrency(order.amount)}</TableCell>
             <TableCell><Badge className={statusClass(order.status)}>{order.status}</Badge></TableCell>
-            <TableCell>
-              <Button size="sm" variant="outline" onClick={() => setSelectedOrder(order)}>
-                View
-              </Button>
-              {['fuel', 'logistics'].includes(order.module) && (
-                <Button
-                  size="sm"
-                  className="ml-2"
-                  onClick={() => {
-                    setStatusDialog({ open: true, order: order.raw, module: order.module as 'fuel' | 'logistics' });
-                    setNextStatus(order.module === 'logistics' ? 'accepted' : 'accepted');
-                  }}
-                >
-                  Update
-                </Button>
+            <TableCell>{formatDate(order.created_at)}</TableCell>
+            <TableCell className="space-x-2 text-right">
+              <Button size="sm" variant="outline" onClick={() => setSelectedOrder(order)}>View</Button>
+              {order.module === 'logistics' && (
+                <Button size="sm" onClick={() => openStatusDialog(order.raw, 'logistics')}>Update</Button>
+              )}
+              {order.module === 'fuel' && (
+                <Button size="sm" onClick={() => openStatusDialog(order.raw, 'fuel')}>Update</Button>
               )}
             </TableCell>
           </TableRow>
@@ -294,44 +476,96 @@ const AdminDashboard = () => {
     </Table>
   );
 
+  const queuePanel = (
+    <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+      <Card>
+        <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <CardTitle>Operations Queue</CardTitle>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers or refs" className="pl-9 sm:w-64" />
+            </div>
+            <Select value={operationFilter} onValueChange={(value) => setOperationFilter(value as 'all' | ManualModule)}>
+              <SelectTrigger className="sm:w-44"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All modules</SelectItem>
+                <SelectItem value="giftcards">Gift Cards</SelectItem>
+                <SelectItem value="logistics">Delivery</SelectItem>
+                <SelectItem value="fuel">Fuel & Gas</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardHeader>
+        <CardContent>{renderOperationsTable(filteredOrders.slice(0, activeTab === 'dashboard' ? 8 : filteredOrders.length))}</CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Live Workload</CardTitle></CardHeader>
+        <CardContent className="space-y-5">
+          {[
+            { label: 'Gift card reviews', value: pendingGiftCards, total: Math.max(giftCardSales.length, 1) },
+            { label: 'Delivery in progress', value: activeDeliveryOrders, total: Math.max(deliveryOrders.length, 1) },
+            { label: 'Fuel dispatch', value: activeFuelOrders, total: Math.max(fuelOrders.length, 1) },
+            { label: 'Support open', value: openSupportCount, total: Math.max(supportTickets.length, 1) }
+          ].map((item) => (
+            <div key={item.label}>
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="font-medium text-slate-700">{item.label}</span>
+                <span className="text-slate-500">{item.value}</span>
+              </div>
+              <Progress value={Math.min(100, Math.round((item.value / item.total) * 100))} />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-[#f8fafc]">
-      <aside className="fixed left-0 top-0 hidden h-full w-64 border-r border-slate-200 bg-white p-5 lg:block">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <aside className="fixed left-0 top-0 hidden h-full w-72 border-r border-slate-200 bg-white p-5 lg:block">
         <div className="mb-8">
-          <p className="text-xs uppercase font-bold text-[#ea580c]">Nadi Digital</p>
-          <h1 className="text-xl font-black text-slate-900">Admin Console</h1>
+          <p className="text-xs font-bold uppercase tracking-wide text-[#ea580c]">Nadi Digital</p>
+          <h1 className="text-2xl font-black">Admin Command</h1>
+          <p className="mt-1 text-xs text-slate-500">Operations, support, users, settings</p>
         </div>
         <nav className="space-y-1">
           {tabs.map((tab) => {
             const Icon = tab.icon;
+            const count = tab.id === 'support' ? openSupportCount : tab.id === 'operations' ? pendingOpsCount : tab.id === 'giftcards' ? pendingGiftCards : undefined;
             return (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${activeTab === tab.id ? 'bg-[#ea580c] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm font-semibold transition ${activeTab === tab.id ? 'bg-[#ea580c] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               >
-                <Icon className="h-4 w-4" />
-                {tab.label}
+                <span className="flex items-center gap-3"><Icon className="h-4 w-4" />{tab.label}</span>
+                {count !== undefined && count > 0 && <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === tab.id ? 'bg-white/20' : 'bg-slate-200 text-slate-700'}`}>{count}</span>}
               </button>
             );
           })}
         </nav>
       </aside>
 
-      <main className="lg:ml-64">
-        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
-          <div>
-            <h2 className="text-lg font-bold capitalize text-slate-900">{activeTab}</h2>
-            <p className="text-xs text-slate-500">{user?.email || 'Admin user'}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={loadAdminData} disabled={loading}>
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              <LogOut className="h-4 w-4" />
-            </Button>
+      <main className="lg:ml-72">
+        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-black capitalize">{activeTab === 'fuel' ? 'Fuel & Gas' : activeTab}</h2>
+              <p className="text-sm text-slate-500">{user?.email || 'Admin user'} · {user?.role || 'admin'}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={loadAdminData} disabled={loading}>
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                <LogOut className="h-4 w-4" />
+                Logout
+              </Button>
+            </div>
           </div>
         </header>
 
@@ -348,45 +582,118 @@ const AdminDashboard = () => {
           ))}
         </div>
 
-        <section className="p-5 space-y-5">
+        <section className="space-y-5 p-5">
           {loading ? (
-            <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-slate-200 bg-white">
-              <RefreshCw className="h-7 w-7 animate-spin text-[#ea580c]" />
+            <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-slate-200 bg-white">
+              <Loader2 className="h-8 w-8 animate-spin text-[#ea580c]" />
             </div>
           ) : (
             <>
               {activeTab === 'dashboard' && (
                 <div className="space-y-5">
-                  <div className="grid gap-4 md:grid-cols-4">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     {summaryCards.map((item) => {
                       const Icon = item.icon;
                       return (
                         <Card key={item.label}>
                           <CardContent className="flex items-center justify-between p-5">
                             <div>
-                              <p className="text-xs text-slate-500">{item.label}</p>
-                              <p className="mt-1 text-2xl font-black text-slate-900">{item.value}</p>
+                              <p className="text-sm text-slate-500">{item.label}</p>
+                              <p className="mt-1 text-2xl font-black">{item.value}</p>
+                              <p className="mt-1 text-xs text-slate-500">{item.detail}</p>
                             </div>
-                            <Icon className="h-6 w-6 text-[#ea580c]" />
+                            <div className="rounded-lg bg-orange-50 p-3 text-[#ea580c]">
+                              <Icon className="h-6 w-6" />
+                            </div>
                           </CardContent>
                         </Card>
                       );
                     })}
                   </div>
-                  <Card>
-                    <CardHeader><CardTitle>Recent Manual Operations</CardTitle></CardHeader>
-                    <CardContent>{renderOrdersTable(filteredOrders.slice(0, 8))}</CardContent>
-                  </Card>
+                  {queuePanel}
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <Card>
+                      <CardHeader><CardTitle>Support Needing Attention</CardTitle></CardHeader>
+                      <CardContent className="space-y-3">
+                        {supportTickets.slice(0, 5).map((ticket) => (
+                          <button key={ticket.id} type="button" onClick={() => setSelectedTicket(ticket)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left hover:bg-slate-50">
+                            <span>
+                              <span className="block font-semibold">{ticket.subject}</span>
+                              <span className="text-xs text-slate-500">{ticket.reference} · {userName(ticket.user)}</span>
+                            </span>
+                            <Badge className={priorityClass(ticket.priority)}>{ticket.priority}</Badge>
+                          </button>
+                        ))}
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardHeader><CardTitle>Control Flags</CardTitle></CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
+                          <div>
+                            <p className="font-semibold">Registration</p>
+                            <p className="text-xs text-slate-500">Allow new customer signups</p>
+                          </div>
+                          <Switch
+                            checked={settings.platform?.registrationEnabled !== false}
+                            onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), registrationEnabled: checked })}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
+                          <div>
+                            <p className="font-semibold">Maintenance mode</p>
+                            <p className="text-xs text-slate-500">Restrict normal customer actions</p>
+                          </div>
+                          <Switch
+                            checked={settings.platform?.maintenanceMode === true}
+                            onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), maintenanceMode: checked })}
+                          />
+                        </div>
+                        <Button onClick={handleSettingsSave} disabled={actionLoading} className="w-full">Save Control Flags</Button>
+                      </CardContent>
+                    </Card>
+                  </div>
                 </div>
               )}
 
-              {activeTab === 'orders' && (
+              {activeTab === 'operations' && queuePanel}
+
+              {activeTab === 'support' && (
                 <Card>
-                  <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <CardTitle>Manual Operations Queue</CardTitle>
-                    <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search orders..." className="max-w-sm" />
+                  <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <CardTitle>Customer Support Console</CardTitle>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search ticket, issue, customer" className="sm:w-72" />
+                      <Select value={supportFilter} onValueChange={setSupportFilter}>
+                        <SelectTrigger className="sm:w-48"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All tickets</SelectItem>
+                          <SelectItem value="open">Open</SelectItem>
+                          <SelectItem value="in_progress">In progress</SelectItem>
+                          <SelectItem value="waiting_customer">Waiting customer</SelectItem>
+                          <SelectItem value="resolved">Resolved</SelectItem>
+                          <SelectItem value="closed">Closed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </CardHeader>
-                  <CardContent>{renderOrdersTable(filteredOrders)}</CardContent>
+                  <CardContent>
+                    <Table>
+                      <TableHeader><TableRow><TableHead>Ticket</TableHead><TableHead>Customer</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead>Owner</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                      <TableBody>
+                        {filteredTickets.map((ticket) => (
+                          <TableRow key={ticket.id}>
+                            <TableCell><div className="font-semibold">{ticket.subject}</div><div className="text-xs text-slate-500">{ticket.reference} · {ticket.category}</div></TableCell>
+                            <TableCell>{userName(ticket.user)}</TableCell>
+                            <TableCell><Badge className={priorityClass(ticket.priority)}>{ticket.priority}</Badge></TableCell>
+                            <TableCell><Badge className={statusClass(ticket.status)}>{ticket.status}</Badge></TableCell>
+                            <TableCell>{ticket.assigned_to || 'Unassigned'}</TableCell>
+                            <TableCell className="text-right"><Button size="sm" onClick={() => { setSelectedTicket(ticket); setSupportNote(ticket.admin_notes || ''); }}>Open</Button></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
                 </Card>
               )}
 
@@ -395,29 +702,17 @@ const AdminDashboard = () => {
                   <CardHeader><CardTitle>Gift Card Sell Reviews</CardTitle></CardHeader>
                   <CardContent>
                     <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Customer</TableHead>
-                          <TableHead>Card</TableHead>
-                          <TableHead>Payout</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
+                      <TableHeader><TableRow><TableHead>Customer</TableHead><TableHead>Card</TableHead><TableHead>Payout</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                       <TableBody>
                         {giftCardSales.map((sale) => (
-                          <TableRow key={sale.id}>
-                            <TableCell>{userName(sale.user)}</TableCell>
-                            <TableCell>{sale.card_currency} {sale.card_value} {sale.card_type}</TableCell>
-                            <TableCell>{formatCurrency(sale.payout_amount)}</TableCell>
-                            <TableCell><Badge className={statusClass(sale.status)}>{sale.status}</Badge></TableCell>
-                            <TableCell className="flex gap-2">
-                              <Button size="sm" disabled={actionLoading || sale.status !== 'pending_review'} onClick={() => handleGiftCardDecision(sale.id, 'approve')}>
-                                <CheckCircle className="h-4 w-4" />
-                              </Button>
-                              <Button size="sm" variant="destructive" disabled={actionLoading || sale.status !== 'pending_review'} onClick={() => handleGiftCardDecision(sale.id, 'reject')}>
-                                <XCircle className="h-4 w-4" />
-                              </Button>
+                          <TableRow key={String(sale.id)}>
+                            <TableCell>{userName(sale.user as UserSummary)}</TableCell>
+                            <TableCell>{String(sale.card_currency || '')} {String(sale.card_value || '')} {String(sale.card_type || '')}</TableCell>
+                            <TableCell>{formatCurrency(Number(sale.payout_amount || 0))}</TableCell>
+                            <TableCell><Badge className={statusClass(String(sale.status))}>{String(sale.status)}</Badge></TableCell>
+                            <TableCell className="space-x-2 text-right">
+                              <Button size="sm" disabled={actionLoading || sale.status !== 'pending_review'} onClick={() => handleGiftCardDecision(String(sale.id), 'approve')}><CheckCircle className="h-4 w-4" />Approve</Button>
+                              <Button size="sm" variant="destructive" disabled={actionLoading || sale.status !== 'pending_review'} onClick={() => handleGiftCardDecision(String(sale.id), 'reject')}><XCircle className="h-4 w-4" />Reject</Button>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -427,37 +722,28 @@ const AdminDashboard = () => {
                 </Card>
               )}
 
+              {activeTab === 'delivery' && (
+                <Card>
+                  <CardHeader><CardTitle>Delivery Dispatch</CardTitle></CardHeader>
+                  <CardContent>{renderOperationsTable(deliveryOrders)}</CardContent>
+                </Card>
+              )}
+
               {activeTab === 'fuel' && (
                 <Card>
                   <CardHeader><CardTitle>Fuel & Gas Fulfillment</CardTitle></CardHeader>
                   <CardContent>
                     <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Reference</TableHead>
-                          <TableHead>Customer</TableHead>
-                          <TableHead>Type</TableHead>
-                          <TableHead>Total</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Action</TableHead>
-                        </TableRow>
-                      </TableHeader>
+                      <TableHeader><TableRow><TableHead>Reference</TableHead><TableHead>Customer</TableHead><TableHead>Type</TableHead><TableHead>Total</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
                       <TableBody>
                         {fuelOrders.map((order) => (
-                          <TableRow key={order.id}>
-                            <TableCell className="font-mono text-xs">{order.order_number}</TableCell>
-                            <TableCell>{userName(order.user)}</TableCell>
-                            <TableCell>{order.order_type}</TableCell>
-                            <TableCell>{formatCurrency(order.pricing?.total)}</TableCell>
-                            <TableCell><Badge className={statusClass(order.status)}>{order.status}</Badge></TableCell>
-                            <TableCell>
-                              <Button size="sm" variant="outline" onClick={() => {
-                                setStatusDialog({ open: true, order, module: 'fuel' });
-                                setNextStatus(order.status === 'pending' ? 'accepted' : 'dispatched');
-                              }}>
-                                Update
-                              </Button>
-                            </TableCell>
+                          <TableRow key={String(order.id)}>
+                            <TableCell className="font-mono text-xs">{String(order.order_number || order.id)}</TableCell>
+                            <TableCell>{userName(order.user as UserSummary)}</TableCell>
+                            <TableCell>{String(order.order_type || 'fuel')}</TableCell>
+                            <TableCell>{formatCurrency(Number((order.pricing as { total?: number } | undefined)?.total || 0))}</TableCell>
+                            <TableCell><Badge className={statusClass(String(order.status))}>{String(order.status)}</Badge></TableCell>
+                            <TableCell className="text-right"><Button size="sm" onClick={() => openStatusDialog(order, 'fuel')}>Update</Button></TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -468,11 +754,53 @@ const AdminDashboard = () => {
 
               {activeTab === 'users' && (
                 <Card>
-                  <CardHeader><CardTitle>Users</CardTitle></CardHeader>
+                  <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <CardTitle>Customer Control</CardTitle>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search users" className="sm:w-72" />
+                      <Select value={userFilter} onValueChange={setUserFilter}>
+                        <SelectTrigger className="sm:w-44"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All users</SelectItem>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
+                          <SelectItem value="kyc_pending">KYC pending</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </CardHeader>
                   <CardContent>
                     <Table>
-                      <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                      <TableBody>{users.map((row) => <TableRow key={row.id}><TableCell>{row.first_name} {row.last_name}</TableCell><TableCell>{row.email}</TableCell><TableCell>{row.role || 'user'}</TableCell><TableCell>{row.is_active ? 'Active' : 'Inactive'}</TableCell></TableRow>)}</TableBody>
+                      <TableHeader><TableRow><TableHead>User</TableHead><TableHead>Role</TableHead><TableHead>KYC</TableHead><TableHead>Status</TableHead><TableHead>Joined</TableHead><TableHead className="text-right">Controls</TableHead></TableRow></TableHeader>
+                      <TableBody>
+                        {filteredUsers.map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell><div className="font-semibold">{userName(row)}</div><div className="text-xs text-slate-500">{row.email}</div></TableCell>
+                            <TableCell><Badge className={statusClass(row.role)}>{row.role || 'user'}</Badge></TableCell>
+                            <TableCell>
+                              <Select value={row.kyc_status || 'pending'} onValueChange={(kycStatus) => handleUserUpdate(row, { kycStatus })}>
+                                <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="pending">Pending</SelectItem>
+                                  <SelectItem value="in_review">In review</SelectItem>
+                                  <SelectItem value="verified">Verified</SelectItem>
+                                  <SelectItem value="rejected">Rejected</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </TableCell>
+                            <TableCell>{row.is_active ? 'Active' : 'Inactive'}</TableCell>
+                            <TableCell>{formatDate(row.created_at)}</TableCell>
+                            <TableCell className="space-x-2 text-right">
+                              <Button size="sm" variant={row.is_active ? 'destructive' : 'outline'} disabled={actionLoading} onClick={() => handleUserUpdate(row, { isActive: !row.is_active })}>
+                                {row.is_active ? 'Suspend' : 'Activate'}
+                              </Button>
+                              {user?.role === 'super_admin' && row.role !== 'admin' && (
+                                <Button size="sm" variant="outline" disabled={actionLoading} onClick={() => handleUserUpdate(row, { role: 'admin' })}>Make Admin</Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
                     </Table>
                   </CardContent>
                 </Card>
@@ -483,51 +811,32 @@ const AdminDashboard = () => {
                   <CardHeader><CardTitle>Transactions</CardTitle></CardHeader>
                   <CardContent>
                     <Table>
-                      <TableHeader><TableRow><TableHead>Reference</TableHead><TableHead>Category</TableHead><TableHead>Type</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                      <TableBody>{transactions.map((tx) => <TableRow key={tx.id}><TableCell className="font-mono text-xs">{tx.reference}</TableCell><TableCell>{tx.category}</TableCell><TableCell>{tx.type}</TableCell><TableCell>{formatCurrency(tx.amount)}</TableCell><TableCell><Badge className={statusClass(tx.status)}>{tx.status}</Badge></TableCell></TableRow>)}</TableBody>
+                      <TableHeader><TableRow><TableHead>Reference</TableHead><TableHead>Customer</TableHead><TableHead>Category</TableHead><TableHead>Type</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                      <TableBody>{transactions.map((tx) => <TableRow key={tx.id}><TableCell className="font-mono text-xs">{tx.reference}</TableCell><TableCell>{userName(tx.user)}</TableCell><TableCell>{tx.category}</TableCell><TableCell>{tx.type}</TableCell><TableCell>{formatCurrency(tx.amount)}</TableCell><TableCell><Badge className={statusClass(tx.status)}>{tx.status}</Badge></TableCell></TableRow>)}</TableBody>
                     </Table>
                   </CardContent>
                 </Card>
               )}
 
               {activeTab === 'settings' && (
-                <Card>
-                  <CardHeader><CardTitle>Operational Settings</CardTitle></CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <Input
-                        type="number"
-                        value={settings.fuel?.fuel?.pms?.price || ''}
-                        onChange={(event) => setSettings((current: any) => ({
-                          ...current,
-                          fuel: { ...current.fuel, fuel: { ...current.fuel?.fuel, pms: { ...(current.fuel?.fuel?.pms || {}), price: Number(event.target.value) } } }
-                        }))}
-                        placeholder="PMS price"
-                      />
-                      <Input
-                        type="number"
-                        value={settings.fuel?.fuel?.ago?.price || ''}
-                        onChange={(event) => setSettings((current: any) => ({
-                          ...current,
-                          fuel: { ...current.fuel, fuel: { ...current.fuel?.fuel, ago: { ...(current.fuel?.fuel?.ago || {}), price: Number(event.target.value) } } }
-                        }))}
-                        placeholder="AGO price"
-                      />
-                      <Input
-                        type="number"
-                        value={settings.fuel?.deliveryFee || ''}
-                        onChange={(event) => setSettings((current: any) => ({
-                          ...current,
-                          fuel: { ...current.fuel, deliveryFee: Number(event.target.value) }
-                        }))}
-                        placeholder="Fuel delivery fee"
-                      />
-                    </div>
-                    <Button onClick={handleSettingsSave} disabled={actionLoading}>
-                      {actionLoading ? 'Saving...' : 'Save Settings'}
-                    </Button>
-                  </CardContent>
-                </Card>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <Card>
+                    <CardHeader><CardTitle>Fuel Pricing</CardTitle></CardHeader>
+                    <CardContent className="grid gap-3 md:grid-cols-2">
+                      <div><Label>PMS price</Label><Input type="number" value={settings.fuel?.fuel?.pms?.price || ''} onChange={(event) => updateSettingsPath('fuel', { ...(settings.fuel || {}), fuel: { ...(settings.fuel?.fuel || {}), pms: { ...(settings.fuel?.fuel?.pms || {}), price: Number(event.target.value) } } })} /></div>
+                      <div><Label>Diesel price</Label><Input type="number" value={settings.fuel?.fuel?.ago?.price || ''} onChange={(event) => updateSettingsPath('fuel', { ...(settings.fuel || {}), fuel: { ...(settings.fuel?.fuel || {}), ago: { ...(settings.fuel?.fuel?.ago || {}), price: Number(event.target.value) } } })} /></div>
+                      <div><Label>Delivery fee</Label><Input type="number" value={settings.fuel?.deliveryFee || ''} onChange={(event) => updateSettingsPath('fuel', { ...(settings.fuel || {}), deliveryFee: Number(event.target.value) })} /></div>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader><CardTitle>Platform Controls</CardTitle></CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3"><span><span className="block font-semibold">Registration enabled</span><span className="text-xs text-slate-500">Allow new accounts</span></span><Switch checked={settings.platform?.registrationEnabled !== false} onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), registrationEnabled: checked })} /></div>
+                      <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3"><span><span className="block font-semibold">Maintenance mode</span><span className="text-xs text-slate-500">Use during provider outages</span></span><Switch checked={settings.platform?.maintenanceMode === true} onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), maintenanceMode: checked })} /></div>
+                      <Button onClick={handleSettingsSave} disabled={actionLoading} className="w-full">{actionLoading ? 'Saving...' : 'Save Settings'}</Button>
+                    </CardContent>
+                  </Card>
+                </div>
               )}
             </>
           )}
@@ -538,11 +847,9 @@ const AdminDashboard = () => {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Operation Details</DialogTitle>
-            <DialogDescription>{selectedOrder?.type} - {selectedOrder?.status}</DialogDescription>
+            <DialogDescription>{selectedOrder?.type} · {selectedOrder?.status}</DialogDescription>
           </DialogHeader>
-          <pre className="max-h-[420px] overflow-auto rounded-xl bg-slate-950 p-4 text-xs text-slate-50">
-            {JSON.stringify(selectedOrder?.raw || {}, null, 2)}
-          </pre>
+          <pre className="max-h-[420px] overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-50">{JSON.stringify(selectedOrder?.raw || {}, null, 2)}</pre>
         </DialogContent>
       </Dialog>
 
@@ -550,36 +857,53 @@ const AdminDashboard = () => {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Update {statusDialog.module === 'logistics' ? 'Delivery' : 'Fuel'} Order</DialogTitle>
-            <DialogDescription>Move this order through the fulfillment workflow.</DialogDescription>
+            <DialogDescription>Assign ownership, move status, and attach notes or proof.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <Select value={nextStatus} onValueChange={setNextStatus}>
-              <SelectTrigger><SelectValue placeholder="Choose status" /></SelectTrigger>
-              <SelectContent>
-                {statusDialog.module === 'logistics' ? (
-                  <>
-                    <SelectItem value="accepted">Accepted</SelectItem>
-                    <SelectItem value="picked_up">Picked Up</SelectItem>
-                    <SelectItem value="in_transit">In Transit</SelectItem>
-                    <SelectItem value="delivered">Delivered</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                  </>
-                ) : (
-                  <>
-                    <SelectItem value="accepted">Accepted</SelectItem>
-                    <SelectItem value="dispatched">Dispatched</SelectItem>
-                    <SelectItem value="delivered">Delivered</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                  </>
-                )}
-              </SelectContent>
-            </Select>
-            <Input value={adminNote} onChange={(event) => setAdminNote(event.target.value)} placeholder="Internal note or proof reference" />
+            <div><Label>Status</Label><Select value={nextStatus} onValueChange={setNextStatus}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{statusDialog.module === 'logistics' ? (<><SelectItem value="accepted">Accepted</SelectItem><SelectItem value="picked_up">Picked Up</SelectItem><SelectItem value="in_transit">In Transit</SelectItem><SelectItem value="delivered">Delivered</SelectItem><SelectItem value="cancelled">Cancelled</SelectItem></>) : (<><SelectItem value="accepted">Accepted</SelectItem><SelectItem value="dispatched">Dispatched</SelectItem><SelectItem value="delivered">Delivered</SelectItem><SelectItem value="cancelled">Cancelled</SelectItem></>)}</SelectContent></Select></div>
+            <div><Label>Assigned operator</Label><Input value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} placeholder="Driver, dispatcher, or operator email" /></div>
+            <div><Label>Proof URL</Label><Input value={proofUrl} onChange={(event) => setProofUrl(event.target.value)} placeholder="Optional delivery proof link" /></div>
+            <div><Label>Note</Label><Textarea value={adminNote} onChange={(event) => setAdminNote(event.target.value)} placeholder="Customer-visible update or internal proof note" /></div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStatusDialog({ open: false })}>Cancel</Button>
-            <Button onClick={handleManualStatus} disabled={actionLoading}>{actionLoading ? 'Saving...' : 'Update Status'}</Button>
-          </DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setStatusDialog({ open: false })}>Cancel</Button><Button onClick={handleManualStatus} disabled={actionLoading}>{actionLoading ? 'Saving...' : 'Update Status'}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!selectedTicket} onOpenChange={(open) => !open && setSelectedTicket(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{selectedTicket?.subject}</DialogTitle>
+            <DialogDescription>{selectedTicket?.reference} · {selectedTicket ? userName(selectedTicket.user) : ''}</DialogDescription>
+          </DialogHeader>
+          {selectedTicket && (
+            <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <div className="space-y-3">
+                <div className="rounded-lg border border-slate-200 p-3">
+                  <p className="text-sm text-slate-500">{selectedTicket.message}</p>
+                </div>
+                <div className="max-h-56 space-y-2 overflow-auto">
+                  {(selectedTicket.replies || []).map((reply, index) => (
+                    <div key={`${reply.createdAt}-${index}`} className="rounded-lg border border-slate-200 p-3">
+                      <div className="mb-1 flex justify-between text-xs text-slate-500"><span>{reply.authorType || 'customer'}</span><span>{formatDate(reply.createdAt)}</span></div>
+                      <p className="text-sm">{reply.message}</p>
+                    </div>
+                  ))}
+                </div>
+                <Textarea value={supportReply} onChange={(event) => setSupportReply(event.target.value)} placeholder="Reply to customer" />
+              </div>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <Badge className={priorityClass(selectedTicket.priority)}>{selectedTicket.priority}</Badge>
+                  <Badge className={statusClass(selectedTicket.status)}>{selectedTicket.status}</Badge>
+                </div>
+                <div><Label>Status</Label><Select value={selectedTicket.status} onValueChange={(status) => handleTicketUpdate(selectedTicket, { status })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="open">Open</SelectItem><SelectItem value="in_progress">In progress</SelectItem><SelectItem value="waiting_customer">Waiting customer</SelectItem><SelectItem value="resolved">Resolved</SelectItem><SelectItem value="closed">Closed</SelectItem></SelectContent></Select></div>
+                <div><Label>Priority</Label><Select value={selectedTicket.priority} onValueChange={(priority) => handleTicketUpdate(selectedTicket, { priority })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="normal">Normal</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="urgent">Urgent</SelectItem></SelectContent></Select></div>
+                <div><Label>Admin notes</Label><Textarea value={supportNote} onChange={(event) => setSupportNote(event.target.value)} placeholder="Internal support notes" /></div>
+                <Button variant="outline" onClick={() => handleTicketUpdate(selectedTicket, { assignedTo: user?.email || user?.id, adminNotes: supportNote })} disabled={actionLoading} className="w-full"><ShieldCheck className="h-4 w-4" />Assign to me</Button>
+                <Button onClick={handleTicketReply} disabled={actionLoading || !supportReply.trim()} className="w-full"><Headphones className="h-4 w-4" />Send Reply</Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

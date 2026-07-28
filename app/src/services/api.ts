@@ -526,6 +526,10 @@ export const supportApi = {
     return httpClient.post(`/support/tickets/${id}/reply`, { message });
   },
 
+  async closeTicket(id: string) {
+    return httpClient.post(`/support/tickets/${id}/close`, {});
+  },
+
   async getFAQs() {
     return httpClient.get('/support/faqs');
   },
@@ -538,7 +542,7 @@ export const supportApi = {
 // Admin API (for admin dashboard)
 export const adminApi = {
   // Users
-  async getUsers(params?: { page?: number; limit?: number; search?: string }) {
+  async getUsers(params?: { page?: number; limit?: number; search?: string; status?: string; kycStatus?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return httpClient.get(`/admin/users?${query}`);
   },
@@ -556,7 +560,7 @@ export const adminApi = {
   },
 
   // Transactions
-  async getTransactions(params?: { page?: number; limit?: number; status?: string }) {
+  async getTransactions(params?: { page?: number; limit?: number; status?: string; type?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return httpClient.get(`/admin/transactions?${query}`);
   },
@@ -609,6 +613,20 @@ export const adminApi = {
       notes: data.note,
       proof: data.proofUrl ? { proofUrl: data.proofUrl } : undefined
     });
+  },
+
+  // Support
+  async getSupportTickets(params?: { status?: string; priority?: string; category?: string; search?: string; limit?: number }) {
+    const query = new URLSearchParams(params as any).toString();
+    return httpClient.get(`/admin/support/tickets?${query}`);
+  },
+
+  async updateSupportTicket(id: string, data: { status?: string; priority?: string; assignedTo?: string; adminNotes?: string }) {
+    return httpClient.patch(`/admin/support/tickets/${id}`, data);
+  },
+
+  async replySupportTicket(id: string, data: { message: string; status?: string; assignedTo?: string }) {
+    return httpClient.post(`/admin/support/tickets/${id}/reply`, data);
   },
 
   // Settings
