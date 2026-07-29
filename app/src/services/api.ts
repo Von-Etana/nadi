@@ -575,6 +575,20 @@ export const adminApi = {
     return httpClient.get(`/admin/giftcards/sales?${query}`);
   },
 
+  async createGiftCardSale(data: {
+    userId: string;
+    cardType: string;
+    cardValue: number;
+    cardCurrency: string;
+    rate?: number;
+    cardCode?: string;
+    cardPin?: string;
+    cardImage?: string;
+    note?: string;
+  }) {
+    return httpClient.post('/admin/giftcards/sales', data);
+  },
+
   async updateGiftCardRate(cardType: string, rate: number) {
     return httpClient.put(`/admin/giftcards/rates/${cardType}`, { rate });
   },
@@ -596,8 +610,41 @@ export const adminApi = {
     return httpClient.get(`/admin/fuel/orders?${query}`);
   },
 
+  async createFuelOrder(data: {
+    userId: string;
+    type: string;
+    subtype: string;
+    quantity: number;
+    deliveryAddress: string;
+    phoneNumber: string;
+    priority?: string;
+    scheduledDate?: string;
+    customerNotes?: string;
+    assignedTo?: string;
+  }) {
+    return httpClient.post('/admin/fuel/orders', data);
+  },
+
   async updateFuelOrderStatus(id: string, data: { status: string; note?: string; assignedTo?: string; proofUrl?: string }) {
     return httpClient.patch(`/admin/fuel/orders/${id}/status`, data);
+  },
+
+  async createShipment(data: {
+    userId: string;
+    pickupAddress: string;
+    deliveryAddress: string;
+    recipientName: string;
+    recipientPhone: string;
+    itemDescription: string;
+    weight: number;
+    serviceType?: string;
+    deliveryCategory?: string;
+    deliveryMode?: string;
+    scheduledDate?: string;
+    assignedTo?: string;
+    notes?: string;
+  }) {
+    return httpClient.post('/admin/logistics/shipments', data);
   },
 
   async assignShipment(id: string, data: { assignedTo: string; note?: string }) {
@@ -646,6 +693,11 @@ export const adminApi = {
   async getRevenueReport(params?: { startDate?: string; endDate?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return httpClient.get(`/admin/analytics/revenue?${query}`);
+  },
+
+  async getReportsOverview(params?: { days?: number }) {
+    const query = new URLSearchParams(params as any).toString();
+    return httpClient.get(`/admin/reports/overview?${query}`);
   },
 };
 

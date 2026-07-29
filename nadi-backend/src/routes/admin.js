@@ -106,6 +106,69 @@ function fuelStatusMessage(status, orderNumber) {
   }
 }
 
+function adminReference(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+}
+
+function normalizeAdminText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parsePositiveNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function bucketLabel(date, granularity) {
+  const current = new Date(date);
+  if (granularity === 'monthly') {
+    return `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+  }
+  if (granularity === 'weekly') {
+    const firstDay = new Date(current.getFullYear(), 0, 1);
+    const week = Math.ceil((((current - firstDay) / 86400000) + firstDay.getDay() + 1) / 7);
+    return `${current.getFullYear()}-W${String(week).padStart(2, '0')}`;
+  }
+  return current.toISOString().slice(0, 10);
+}
+
+function groupTransactionSeries(rows, granularity) {
+  const groups = {};
+  (rows || []).forEach(row => {
+    const label = bucketLabel(row.created_at, granularity);
+    if (!groups[label]) {
+      groups[label] = { label, count: 0, volume: 0, completed: 0, failed: 0 };
+    }
+    groups[label].count += 1;
+    groups[label].volume += Number(row.amount || 0);
+    if (row.status === 'completed') groups[label].completed += 1;
+    if (row.status === 'failed') groups[label].failed += 1;
+  });
+  return Object.values(groups).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function groupUserSeries(rows, granularity) {
+  const groups = {};
+  (rows || []).forEach(row => {
+    const label = bucketLabel(row.created_at, granularity);
+    if (!groups[label]) {
+      groups[label] = { label, registrations: 0, active: 0, verified: 0 };
+    }
+    groups[label].registrations += 1;
+    if (row.is_active) groups[label].active += 1;
+    if (row.kyc_status === 'verified') groups[label].verified += 1;
+  });
+  return Object.values(groups).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function countBy(rows, key) {
+  return (rows || []).reduce((acc, row) => {
+    const value = row[key] || 'unknown';
+    acc[value] = (acc[value] || 0) + 1;
+    return acc;
+  }, {});
+}
+
 function sanitizeSupportTicket(ticket) {
   if (!ticket) return ticket;
   return {
@@ -437,6 +500,91 @@ router.get('/giftcards/sales', async (req, res) => {
   }
 });
 
+router.post('/giftcards/sales', async (req, res) => {
+  try {
+    const {
+      userId,
+      cardType,
+      cardValue,
+      cardCurrency = 'USD',
+      rate,
+      cardCode,
+      cardPin,
+      cardImage,
+      note
+    } = req.body;
+
+    const targetUserId = normalizeAdminText(userId);
+    const normalizedCardType = normalizeAdminText(cardType).toLowerCase();
+    const numericValue = parsePositiveNumber(cardValue);
+
+    if (!targetUserId || !normalizedCardType || !numericValue) {
+      return res.status(400).json({ success: false, message: 'User, card type and card value are required' });
+    }
+
+    const { data: targetUser, error: userError } = await supabase
+      .from('users')
+      .select('id,email,first_name,last_name')
+      .eq('id', targetUserId)
+      .maybeSingle();
+
+    if (userError || !targetUser) {
+      return res.status(404).json({ success: false, message: 'Target user not found' });
+    }
+
+    const settings = await readOperationalSettings();
+    const currency = String(cardCurrency || 'USD').toUpperCase();
+    const settingsRate = settings.giftcards?.rates?.[normalizedCardType]?.[currency];
+    const numericRate = parsePositiveNumber(rate, Number(settingsRate || 0));
+    if (!numericRate) {
+      return res.status(400).json({ success: false, message: 'A valid gift card rate is required' });
+    }
+
+    const payoutAmount = numericValue * numericRate;
+    const reference = adminReference('GFT-ADMIN');
+    const { data: sale, error } = await supabase
+      .from('user_giftcards')
+      .insert({
+        user_id: targetUserId,
+        type: 'sell',
+        card_type: normalizedCardType,
+        card_value: numericValue,
+        card_currency: currency,
+        card_code: cardCode || null,
+        card_pin: cardPin || null,
+        card_image: cardImage || null,
+        rate: numericRate,
+        payout_amount: payoutAmount,
+        payout_currency: 'NGN',
+        status: 'pending_review',
+        review: {
+          reference,
+          source: 'admin_assisted',
+          createdBy: req.user.id,
+          createdAt: new Date().toISOString(),
+          note: note || null
+        }
+      })
+      .select('*, user:users(first_name,last_name,email,phone)')
+      .single();
+
+    if (error) throw error;
+
+    await createNotification({
+      user_id: targetUserId,
+      type: 'giftcard',
+      title: 'Gift Card Trade Submitted',
+      message: `An admin submitted your ${currency} ${numericValue} ${normalizedCardType} gift card for review.`,
+      related_to: { table: 'user_giftcards', id: sale.id }
+    }).catch(err => logger.error('Admin gift card sale notification error:', err));
+
+    res.status(201).json({ success: true, message: 'Gift card sale submitted for review', sale });
+  } catch (error) {
+    logger.error('Admin create gift card sale error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create gift card sale' });
+  }
+});
+
 router.post('/giftcards/sales/:id/approve', async (req, res) => {
   try {
     const { note } = req.body;
@@ -601,6 +749,268 @@ router.get('/fuel/orders', async (req, res) => {
   } catch (error) {
     logger.error('Admin get fuel orders error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch fuel orders' });
+  }
+});
+
+router.post('/logistics/shipments', async (req, res) => {
+  try {
+    const {
+      userId,
+      pickupAddress,
+      deliveryAddress,
+      recipientName,
+      recipientPhone,
+      itemDescription,
+      weight,
+      serviceType = 'standard',
+      deliveryCategory = 'parcel',
+      deliveryMode = 'door_to_door',
+      scheduledDate,
+      assignedTo,
+      notes
+    } = req.body;
+
+    const targetUserId = normalizeAdminText(userId);
+    const pickup = normalizeAdminText(pickupAddress);
+    const delivery = normalizeAdminText(deliveryAddress);
+    const recipient = normalizeAdminText(recipientName);
+    const phone = normalizeAdminText(recipientPhone);
+    const description = normalizeAdminText(itemDescription);
+    const weightNum = parsePositiveNumber(weight);
+
+    if (!targetUserId || !pickup || !delivery || !recipient || !phone || !description || !weightNum) {
+      return res.status(400).json({ success: false, message: 'User, pickup, delivery, recipient, item and weight are required' });
+    }
+
+    const { data: targetUser, error: userError } = await supabase
+      .from('users')
+      .select('id,email,first_name,last_name')
+      .eq('id', targetUserId)
+      .maybeSingle();
+
+    if (userError || !targetUser) {
+      return res.status(404).json({ success: false, message: 'Target user not found' });
+    }
+
+    const baseRate = Math.max(1500, weightNum * 500);
+    let amount = baseRate;
+    if (serviceType === 'express') amount = baseRate * 1.5;
+    if (serviceType === 'sameDay') amount = baseRate * 2.5;
+    if (deliveryMode === 'interstate') amount += 3000;
+    if (deliveryCategory === 'document') amount = Math.max(1000, amount - 500);
+
+    const orderNumber = adminReference('NADI-LOG-ADMIN');
+    const status = assignedTo ? 'accepted' : 'pending';
+    const { data: order, error } = await supabase
+      .from('logistics_orders')
+      .insert({
+        order_number: orderNumber,
+        user_id: targetUserId,
+        transaction_id: null,
+        pickup: { address: pickup, coordinates: null, isWhat3words: false },
+        delivery: { address: delivery, coordinates: null, isWhat3words: false, recipientName: recipient, recipientPhone: phone },
+        items: [{ description, weight: weightNum, category: deliveryCategory }],
+        package: { weight: weightNum, serviceType, deliveryCategory, deliveryMode, scheduledDate: scheduledDate ? new Date(scheduledDate).toISOString() : null },
+        pricing: { baseAmount: amount, insurance: 0, total: amount, paymentMethod: 'admin_created', paymentStatus: 'manual_or_unpaid' },
+        insurance: { optedIn: false },
+        status,
+        assigned_to: assignedTo || null,
+        tracking: {
+          status,
+          logs: [{
+            status,
+            timestamp: new Date().toISOString(),
+            message: assignedTo ? `Admin created and assigned shipment to ${assignedTo}` : 'Admin created delivery request',
+            actorId: req.user.id,
+            note: notes || null
+          }]
+        }
+      })
+      .select('*, user:users(first_name,last_name,email,phone)')
+      .single();
+
+    if (error) throw error;
+
+    await createNotification({
+      user_id: targetUserId,
+      type: 'order',
+      title: 'Delivery Request Created',
+      message: `An admin created delivery request ${orderNumber} for you.`,
+      related_to: { table: 'logistics_orders', id: order.id }
+    }).catch(err => logger.error('Admin delivery creation notification error:', err));
+
+    res.status(201).json({ success: true, message: 'Delivery request created', order });
+  } catch (error) {
+    logger.error('Admin create delivery order error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create delivery request' });
+  }
+});
+
+router.get('/reports/overview', async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days || '90', 10) || 90, 7), 365);
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const [transactionsRes, usersRes] = await Promise.all([
+      supabase
+        .from('transactions')
+        .select('id,created_at,amount,status,category,type,user_id')
+        .gte('created_at', since.toISOString())
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('users')
+        .select('id,created_at,is_active,kyc_status,role,account_type')
+        .gte('created_at', since.toISOString())
+        .order('created_at', { ascending: true })
+    ]);
+
+    const firstError = transactionsRes.error || usersRes.error;
+    if (firstError) throw firstError;
+
+    const txRows = transactionsRes.data || [];
+    const userRows = usersRes.data || [];
+    const completedRows = txRows.filter(row => row.status === 'completed');
+    const volume = txRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const completedVolume = completedRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+    res.json({
+      success: true,
+      range: { days, since: since.toISOString(), generatedAt: new Date().toISOString() },
+      transactions: {
+        summary: {
+          total: txRows.length,
+          completed: completedRows.length,
+          failed: txRows.filter(row => row.status === 'failed').length,
+          pending: txRows.filter(row => row.status === 'pending').length,
+          volume,
+          completedVolume,
+          averageAmount: txRows.length ? volume / txRows.length : 0
+        },
+        daily: groupTransactionSeries(txRows, 'daily'),
+        weekly: groupTransactionSeries(txRows, 'weekly'),
+        monthly: groupTransactionSeries(txRows, 'monthly'),
+        byStatus: countBy(txRows, 'status'),
+        byCategory: countBy(txRows, 'category'),
+        byType: countBy(txRows, 'type')
+      },
+      users: {
+        summary: {
+          newUsers: userRows.length,
+          active: userRows.filter(row => row.is_active).length,
+          verified: userRows.filter(row => row.kyc_status === 'verified').length,
+          admins: userRows.filter(row => ['admin', 'super_admin'].includes(row.role)).length
+        },
+        daily: groupUserSeries(userRows, 'daily'),
+        weekly: groupUserSeries(userRows, 'weekly'),
+        monthly: groupUserSeries(userRows, 'monthly'),
+        byKyc: countBy(userRows, 'kyc_status'),
+        byRole: countBy(userRows, 'role'),
+        byAccountType: countBy(userRows, 'account_type')
+      }
+    });
+  } catch (error) {
+    logger.error('Admin reports overview error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch reports overview' });
+  }
+});
+
+router.post('/fuel/orders', async (req, res) => {
+  try {
+    const {
+      userId,
+      type,
+      subtype,
+      quantity,
+      deliveryAddress,
+      phoneNumber,
+      priority = 'normal',
+      scheduledDate,
+      customerNotes,
+      assignedTo
+    } = req.body;
+
+    const targetUserId = normalizeAdminText(userId);
+    const normalizedType = normalizeAdminText(type);
+    const normalizedSubtype = normalizeAdminText(subtype);
+    const qtyNum = parsePositiveNumber(quantity);
+    const address = normalizeAdminText(deliveryAddress);
+
+    if (!targetUserId || !['fuel', 'gas'].includes(normalizedType) || !normalizedSubtype || !qtyNum || !address || !normalizeAdminText(phoneNumber)) {
+      return res.status(400).json({ success: false, message: 'User, type, subtype, quantity, address and phone number are required' });
+    }
+
+    const { data: targetUser, error: userError } = await supabase
+      .from('users')
+      .select('id,email,first_name,last_name')
+      .eq('id', targetUserId)
+      .maybeSingle();
+
+    if (userError || !targetUser) {
+      return res.status(404).json({ success: false, message: 'Target user not found' });
+    }
+
+    const settings = await readOperationalSettings();
+    const fuelSettings = settings.fuel || DEFAULT_OPERATIONAL_SETTINGS.fuel;
+    const priceRecord = normalizedType === 'fuel'
+      ? fuelSettings.fuel?.[normalizedSubtype]
+      : fuelSettings.gas?.[normalizedSubtype];
+
+    if (!priceRecord?.price) {
+      return res.status(400).json({ success: false, message: 'Invalid fuel/gas subtype' });
+    }
+
+    const itemAmount = Number(priceRecord.price) * qtyNum;
+    const deliveryFee = Number(fuelSettings.deliveryFee || 0);
+    const total = itemAmount + deliveryFee;
+    const orderNumber = adminReference('NADI-FUEL-ADMIN');
+    const status = assignedTo ? 'accepted' : 'pending';
+
+    const { data: order, error } = await supabase
+      .from('fuel_orders')
+      .insert({
+        order_number: orderNumber,
+        user_id: targetUserId,
+        transaction_id: null,
+        order_type: normalizedType,
+        fuel_details: normalizedType === 'fuel' ? { subtype: normalizedSubtype, quantity: qtyNum, unitPrice: Number(priceRecord.price) } : null,
+        gas_details: normalizedType === 'gas' ? { subtype: normalizedSubtype, quantity: qtyNum, unitPrice: Number(priceRecord.price) } : null,
+        delivery_address: { address, coordinates: null, isWhat3words: false },
+        contact_phone: phoneNumber,
+        pricing: { itemAmount, deliveryFee, total, paymentMethod: 'admin_created', paymentStatus: 'manual_or_unpaid' },
+        status,
+        priority,
+        assigned_driver: assignedTo || null,
+        scheduled_date: scheduledDate ? new Date(scheduledDate).toISOString() : null,
+        customer_notes: customerNotes || null,
+        admin_notes: `Created by admin ${req.user.email || req.user.id}`,
+        tracking: {
+          status,
+          logs: [{
+            status,
+            timestamp: new Date().toISOString(),
+            message: assignedTo ? `Admin created and assigned order to ${assignedTo}` : 'Admin created fuel/gas request',
+            actorId: req.user.id
+          }]
+        }
+      })
+      .select('*, user:users(first_name,last_name,email,phone)')
+      .single();
+
+    if (error) throw error;
+
+    await createNotification({
+      user_id: targetUserId,
+      type: 'order',
+      title: 'Fuel/Gas Request Created',
+      message: `An admin created fuel/gas request ${orderNumber} for you.`,
+      related_to: { table: 'fuel_orders', id: order.id }
+    }).catch(err => logger.error('Admin fuel creation notification error:', err));
+
+    res.status(201).json({ success: true, message: 'Fuel/gas request created', order });
+  } catch (error) {
+    logger.error('Admin create fuel order error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create fuel/gas request' });
   }
 });
 

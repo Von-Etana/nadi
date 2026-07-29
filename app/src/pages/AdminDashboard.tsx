@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BarChart3,
   CheckCircle,
   Fuel,
   Gift,
@@ -8,6 +9,7 @@ import {
   Loader2,
   LogOut,
   Package,
+  Plus,
   RefreshCw,
   Search,
   Settings,
@@ -18,6 +20,18 @@ import {
   XCircle
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -53,7 +67,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { adminApi } from '@/services/api';
 
-type AdminTab = 'dashboard' | 'operations' | 'support' | 'giftcards' | 'delivery' | 'fuel' | 'users' | 'transactions' | 'settings';
+type AdminTab = 'dashboard' | 'operations' | 'support' | 'giftcards' | 'delivery' | 'fuel' | 'users' | 'transactions' | 'reports' | 'settings';
 type ManualModule = 'giftcards' | 'logistics' | 'fuel';
 type UserSummary = {
   first_name?: string;
@@ -104,6 +118,37 @@ type TransactionRow = {
   status?: string;
   created_at?: string;
   user?: UserSummary;
+};
+type ReportGranularity = 'daily' | 'weekly' | 'monthly';
+type ReportPoint = {
+  label: string;
+  count?: number;
+  volume?: number;
+  completed?: number;
+  failed?: number;
+  registrations?: number;
+  active?: number;
+  verified?: number;
+};
+type ReportsOverview = {
+  transactions?: {
+    summary?: Record<string, number>;
+    daily?: ReportPoint[];
+    weekly?: ReportPoint[];
+    monthly?: ReportPoint[];
+    byStatus?: Record<string, number>;
+    byCategory?: Record<string, number>;
+    byType?: Record<string, number>;
+  };
+  users?: {
+    summary?: Record<string, number>;
+    daily?: ReportPoint[];
+    weekly?: ReportPoint[];
+    monthly?: ReportPoint[];
+    byKyc?: Record<string, number>;
+    byRole?: Record<string, number>;
+    byAccountType?: Record<string, number>;
+  };
 };
 
 const formatCurrency = (value?: number) => `NGN ${Number(value || 0).toLocaleString()}`;
@@ -248,6 +293,47 @@ const getDeliveryItemLabel = (order: Record<string, unknown>) => {
   return `${firstItem.description || 'Delivery item'}${firstItem.weight ? ` · ${firstItem.weight}kg` : ''}`;
 };
 
+const initialDeliveryForm = {
+  userId: '',
+  pickupAddress: '',
+  deliveryAddress: '',
+  recipientName: '',
+  recipientPhone: '',
+  itemDescription: '',
+  weight: 1,
+  serviceType: 'standard',
+  deliveryCategory: 'parcel',
+  deliveryMode: 'door_to_door',
+  scheduledDate: '',
+  assignedTo: '',
+  notes: ''
+};
+
+const initialFuelForm = {
+  userId: '',
+  type: 'fuel',
+  subtype: 'pms',
+  quantity: 1,
+  deliveryAddress: '',
+  phoneNumber: '',
+  priority: 'normal',
+  scheduledDate: '',
+  customerNotes: '',
+  assignedTo: ''
+};
+
+const initialGiftCardForm = {
+  userId: '',
+  cardType: 'amazon',
+  cardValue: 50,
+  cardCurrency: 'USD',
+  rate: 0,
+  cardCode: '',
+  cardPin: '',
+  cardImage: '',
+  note: ''
+};
+
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
   const [loading, setLoading] = useState(true);
@@ -259,6 +345,8 @@ const AdminDashboard = () => {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [transactions, setTransactions] = useState<TransactionRow[]>([]);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [reports, setReports] = useState<ReportsOverview>({});
+  const [reportGranularity, setReportGranularity] = useState<ReportGranularity>('daily');
   const [settings, setSettings] = useState<Record<string, any>>({});
   const [search, setSearch] = useState('');
   const [operationFilter, setOperationFilter] = useState<'all' | ManualModule>('all');
@@ -273,6 +361,10 @@ const AdminDashboard = () => {
   const [adminNote, setAdminNote] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
   const [proofUrl, setProofUrl] = useState('');
+  const [createDialog, setCreateDialog] = useState<null | 'delivery' | 'fuel' | 'giftcard'>(null);
+  const [deliveryForm, setDeliveryForm] = useState(initialDeliveryForm);
+  const [fuelForm, setFuelForm] = useState(initialFuelForm);
+  const [giftCardForm, setGiftCardForm] = useState(initialGiftCardForm);
   const { logout, user } = useAuth();
   const navigate = useNavigate();
 
@@ -285,6 +377,7 @@ const AdminDashboard = () => {
     { id: 'fuel', label: 'Fuel & Gas', icon: Fuel },
     { id: 'users', label: 'Users', icon: Users },
     { id: 'transactions', label: 'Transactions', icon: Wallet },
+    { id: 'reports', label: 'Reports', icon: BarChart3 },
     { id: 'settings', label: 'Settings', icon: Settings }
   ] as const;
 
@@ -299,7 +392,8 @@ const AdminDashboard = () => {
         usersRes,
         txRes,
         settingsRes,
-        supportRes
+        supportRes,
+        reportsRes
       ] = await Promise.all([
         adminApi.getDashboardStats(),
         adminApi.getOperationOrders(),
@@ -308,7 +402,8 @@ const AdminDashboard = () => {
         adminApi.getUsers({ limit: 75 }),
         adminApi.getTransactions({ limit: 75 }),
         adminApi.getSettings(),
-        adminApi.getSupportTickets({ limit: 75 })
+        adminApi.getSupportTickets({ limit: 75 }),
+        adminApi.getReportsOverview({ days: 90 })
       ]);
 
       setStats(statsRes.data?.stats || {});
@@ -319,6 +414,7 @@ const AdminDashboard = () => {
       setTransactions(txRes.data?.transactions || []);
       setSettings(settingsRes.data?.settings || {});
       setSupportTickets(supportRes.data?.tickets || []);
+      setReports(reportsRes.data || {});
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load admin data');
     } finally {
@@ -382,6 +478,10 @@ const AdminDashboard = () => {
   const activeDeliveryOrders = deliveryOrders.filter((order) => ['pending', 'accepted', 'picked_up', 'in_transit'].includes(order.status)).length;
   const completedTransactions = transactions.filter((tx) => tx.status === 'completed').length;
   const completionRate = transactions.length ? Math.round((completedTransactions / transactions.length) * 100) : 0;
+  const transactionChartData = reports.transactions?.[reportGranularity] || [];
+  const userChartData = reports.users?.[reportGranularity] || [];
+  const transactionCategoryRows = Object.entries(reports.transactions?.byCategory || {}).map(([name, value]) => ({ name, value }));
+  const userKycRows = Object.entries(reports.users?.byKyc || {}).map(([name, value]) => ({ name, value }));
 
   const summaryCards = [
     { label: 'Customers', value: stats.totalUsers || users.length, detail: `${stats.activeUsers || users.filter((row) => row.is_active).length} active`, icon: Users },
@@ -518,6 +618,64 @@ const AdminDashboard = () => {
       await loadAdminData();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save settings. Super admin access may be required.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCreateDelivery = async () => {
+    try {
+      setActionLoading(true);
+      await adminApi.createShipment({
+        ...deliveryForm,
+        userId: deliveryForm.userId === 'none' ? '' : deliveryForm.userId,
+        weight: Number(deliveryForm.weight)
+      });
+      toast.success('Delivery request created for user');
+      setDeliveryForm(initialDeliveryForm);
+      setCreateDialog(null);
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create delivery request');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCreateFuel = async () => {
+    try {
+      setActionLoading(true);
+      await adminApi.createFuelOrder({
+        ...fuelForm,
+        userId: fuelForm.userId === 'none' ? '' : fuelForm.userId,
+        quantity: Number(fuelForm.quantity)
+      });
+      toast.success('Fuel/gas request created for user');
+      setFuelForm(initialFuelForm);
+      setCreateDialog(null);
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create fuel/gas request');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCreateGiftCardSale = async () => {
+    try {
+      setActionLoading(true);
+      await adminApi.createGiftCardSale({
+        ...giftCardForm,
+        userId: giftCardForm.userId === 'none' ? '' : giftCardForm.userId,
+        cardValue: Number(giftCardForm.cardValue),
+        rate: Number(giftCardForm.rate) || undefined
+      });
+      toast.success('Gift card trade submitted for review');
+      setGiftCardForm(initialGiftCardForm);
+      setCreateDialog(null);
+      await loadAdminData();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create gift card trade');
     } finally {
       setActionLoading(false);
     }
@@ -786,7 +944,10 @@ const AdminDashboard = () => {
 
               {activeTab === 'giftcards' && (
                 <Card>
-                  <CardHeader><CardTitle>Gift Card Sell Reviews</CardTitle></CardHeader>
+                  <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <CardTitle>Gift Card Sell Reviews</CardTitle>
+                    <Button onClick={() => setCreateDialog('giftcard')}><Plus className="h-4 w-4" />Assist Trade</Button>
+                  </CardHeader>
                   <CardContent>
                     <Table>
                       <TableHeader><TableRow><TableHead>Customer</TableHead><TableHead>Card</TableHead><TableHead>Payout</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
@@ -832,6 +993,7 @@ const AdminDashboard = () => {
                     <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <CardTitle>Delivery Dispatch</CardTitle>
                       <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button onClick={() => setCreateDialog('delivery')}><Plus className="h-4 w-4" />Create delivery</Button>
                         <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search shipment or customer" className="sm:w-72" />
                         <Button variant="outline" onClick={loadAdminData} disabled={loading}><RefreshCw className="h-4 w-4" />Refresh</Button>
                       </div>
@@ -926,6 +1088,7 @@ const AdminDashboard = () => {
                     <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <CardTitle>Fuel & Gas Fulfillment</CardTitle>
                       <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button onClick={() => setCreateDialog('fuel')}><Plus className="h-4 w-4" />Create fuel/gas</Button>
                         <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search order or customer" className="sm:w-72" />
                         <Button variant="outline" onClick={loadAdminData} disabled={loading}><RefreshCw className="h-4 w-4" />Refresh</Button>
                       </div>
@@ -1072,6 +1235,98 @@ const AdminDashboard = () => {
                 </Card>
               )}
 
+              {activeTab === 'reports' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h3 className="text-xl font-black">Reports & Live Charts</h3>
+                      <p className="text-sm text-slate-500">Transaction volume, user growth, status mix, and module breakdowns.</p>
+                    </div>
+                    <Select value={reportGranularity} onValueChange={(value) => setReportGranularity(value as ReportGranularity)}>
+                      <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="daily">Daily</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-4">
+                    {[
+                      { label: 'Transactions', value: reports.transactions?.summary?.total || 0 },
+                      { label: 'Completed volume', value: formatCurrency(reports.transactions?.summary?.completedVolume || 0) },
+                      { label: 'New users', value: reports.users?.summary?.newUsers || 0 },
+                      { label: 'Verified users', value: reports.users?.summary?.verified || 0 }
+                    ].map((item) => (
+                      <Card key={item.label}>
+                        <CardContent className="p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+                          <p className="mt-1 text-2xl font-black">{item.value}</p>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <Card>
+                      <CardHeader><CardTitle>Transaction Volume</CardTitle></CardHeader>
+                      <CardContent className="h-80">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={transactionChartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                            <YAxis tick={{ fontSize: 12 }} />
+                            <Tooltip formatter={(value) => typeof value === 'number' ? value.toLocaleString() : value} />
+                            <Legend />
+                            <Area type="monotone" dataKey="volume" name="Volume" stroke="#ea580c" fill="#fed7aa" />
+                            <Area type="monotone" dataKey="count" name="Count" stroke="#0f172a" fill="#cbd5e1" />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader><CardTitle>User Growth</CardTitle></CardHeader>
+                      <CardContent className="h-80">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={userChartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                            <YAxis tick={{ fontSize: 12 }} />
+                            <Tooltip />
+                            <Legend />
+                            <Bar dataKey="registrations" name="Registrations" fill="#ea580c" />
+                            <Bar dataKey="verified" name="Verified" fill="#16a34a" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <Card>
+                      <CardHeader><CardTitle>Transactions By Category</CardTitle></CardHeader>
+                      <CardContent>
+                        <Table>
+                          <TableHeader><TableRow><TableHead>Category</TableHead><TableHead>Count</TableHead></TableRow></TableHeader>
+                          <TableBody>{transactionCategoryRows.map((row) => <TableRow key={row.name}><TableCell>{row.name}</TableCell><TableCell>{row.value}</TableCell></TableRow>)}</TableBody>
+                        </Table>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardHeader><CardTitle>Users By KYC</CardTitle></CardHeader>
+                      <CardContent>
+                        <Table>
+                          <TableHeader><TableRow><TableHead>KYC Status</TableHead><TableHead>Count</TableHead></TableRow></TableHeader>
+                          <TableBody>{userKycRows.map((row) => <TableRow key={row.name}><TableCell>{row.name}</TableCell><TableCell>{row.value}</TableCell></TableRow>)}</TableBody>
+                        </Table>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              )}
+
               {activeTab === 'settings' && (
                 <div className="grid gap-4 xl:grid-cols-2">
                   <Card>
@@ -1096,6 +1351,71 @@ const AdminDashboard = () => {
           )}
         </section>
       </main>
+
+      <Dialog open={!!createDialog} onOpenChange={(open) => !open && setCreateDialog(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {createDialog === 'delivery' && 'Create Delivery Request'}
+              {createDialog === 'fuel' && 'Create Fuel/Gas Request'}
+              {createDialog === 'giftcard' && 'Assist Gift Card Trade'}
+            </DialogTitle>
+            <DialogDescription>Create an operational request for a selected customer without silently debiting their wallet.</DialogDescription>
+          </DialogHeader>
+
+          {createDialog === 'delivery' && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="md:col-span-2"><Label>User</Label><Select value={deliveryForm.userId || 'none'} onValueChange={(userId) => setDeliveryForm((current) => ({ ...current, userId }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Select customer</SelectItem>{users.map((row) => <SelectItem key={row.id} value={row.id}>{userName(row)} · {row.email}</SelectItem>)}</SelectContent></Select></div>
+              <div><Label>Pickup address</Label><Input value={deliveryForm.pickupAddress} onChange={(event) => setDeliveryForm((current) => ({ ...current, pickupAddress: event.target.value }))} /></div>
+              <div><Label>Delivery address</Label><Input value={deliveryForm.deliveryAddress} onChange={(event) => setDeliveryForm((current) => ({ ...current, deliveryAddress: event.target.value }))} /></div>
+              <div><Label>Recipient name</Label><Input value={deliveryForm.recipientName} onChange={(event) => setDeliveryForm((current) => ({ ...current, recipientName: event.target.value }))} /></div>
+              <div><Label>Recipient phone</Label><Input value={deliveryForm.recipientPhone} onChange={(event) => setDeliveryForm((current) => ({ ...current, recipientPhone: event.target.value }))} /></div>
+              <div><Label>Item</Label><Input value={deliveryForm.itemDescription} onChange={(event) => setDeliveryForm((current) => ({ ...current, itemDescription: event.target.value }))} /></div>
+              <div><Label>Weight kg</Label><Input type="number" value={deliveryForm.weight} onChange={(event) => setDeliveryForm((current) => ({ ...current, weight: Number(event.target.value) }))} /></div>
+              <div><Label>Service</Label><Select value={deliveryForm.serviceType} onValueChange={(serviceType) => setDeliveryForm((current) => ({ ...current, serviceType }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="express">Express</SelectItem><SelectItem value="sameDay">Same day</SelectItem></SelectContent></Select></div>
+              <div><Label>Mode</Label><Select value={deliveryForm.deliveryMode} onValueChange={(deliveryMode) => setDeliveryForm((current) => ({ ...current, deliveryMode }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="door_to_door">Door to door</SelectItem><SelectItem value="interstate">Interstate</SelectItem></SelectContent></Select></div>
+              <div><Label>Assign operator</Label><Input value={deliveryForm.assignedTo} onChange={(event) => setDeliveryForm((current) => ({ ...current, assignedTo: event.target.value }))} placeholder="Optional" /></div>
+              <div><Label>Scheduled date</Label><Input type="datetime-local" value={deliveryForm.scheduledDate} onChange={(event) => setDeliveryForm((current) => ({ ...current, scheduledDate: event.target.value }))} /></div>
+              <div className="md:col-span-2"><Label>Notes</Label><Textarea value={deliveryForm.notes} onChange={(event) => setDeliveryForm((current) => ({ ...current, notes: event.target.value }))} /></div>
+            </div>
+          )}
+
+          {createDialog === 'fuel' && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="md:col-span-2"><Label>User</Label><Select value={fuelForm.userId || 'none'} onValueChange={(userId) => setFuelForm((current) => ({ ...current, userId }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Select customer</SelectItem>{users.map((row) => <SelectItem key={row.id} value={row.id}>{userName(row)} · {row.email}</SelectItem>)}</SelectContent></Select></div>
+              <div><Label>Type</Label><Select value={fuelForm.type} onValueChange={(type) => setFuelForm((current) => ({ ...current, type, subtype: type === 'fuel' ? 'pms' : '12.5kg' }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fuel">Fuel</SelectItem><SelectItem value="gas">Gas</SelectItem></SelectContent></Select></div>
+              <div><Label>Subtype</Label><Select value={fuelForm.subtype} onValueChange={(subtype) => setFuelForm((current) => ({ ...current, subtype }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{fuelForm.type === 'fuel' ? (<><SelectItem value="pms">PMS</SelectItem><SelectItem value="ago">Diesel</SelectItem></>) : (<><SelectItem value="3kg">3kg</SelectItem><SelectItem value="6kg">6kg</SelectItem><SelectItem value="12.5kg">12.5kg</SelectItem><SelectItem value="25kg">25kg</SelectItem><SelectItem value="50kg">50kg</SelectItem></>)}</SelectContent></Select></div>
+              <div><Label>Quantity</Label><Input type="number" value={fuelForm.quantity} onChange={(event) => setFuelForm((current) => ({ ...current, quantity: Number(event.target.value) }))} /></div>
+              <div><Label>Phone</Label><Input value={fuelForm.phoneNumber} onChange={(event) => setFuelForm((current) => ({ ...current, phoneNumber: event.target.value }))} /></div>
+              <div className="md:col-span-2"><Label>Delivery address</Label><Input value={fuelForm.deliveryAddress} onChange={(event) => setFuelForm((current) => ({ ...current, deliveryAddress: event.target.value }))} /></div>
+              <div><Label>Assign operator</Label><Input value={fuelForm.assignedTo} onChange={(event) => setFuelForm((current) => ({ ...current, assignedTo: event.target.value }))} placeholder="Optional" /></div>
+              <div><Label>Scheduled date</Label><Input type="datetime-local" value={fuelForm.scheduledDate} onChange={(event) => setFuelForm((current) => ({ ...current, scheduledDate: event.target.value }))} /></div>
+              <div className="md:col-span-2"><Label>Customer notes</Label><Textarea value={fuelForm.customerNotes} onChange={(event) => setFuelForm((current) => ({ ...current, customerNotes: event.target.value }))} /></div>
+            </div>
+          )}
+
+          {createDialog === 'giftcard' && (
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="md:col-span-2"><Label>User</Label><Select value={giftCardForm.userId || 'none'} onValueChange={(userId) => setGiftCardForm((current) => ({ ...current, userId }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Select customer</SelectItem>{users.map((row) => <SelectItem key={row.id} value={row.id}>{userName(row)} · {row.email}</SelectItem>)}</SelectContent></Select></div>
+              <div><Label>Card type</Label><Input value={giftCardForm.cardType} onChange={(event) => setGiftCardForm((current) => ({ ...current, cardType: event.target.value }))} /></div>
+              <div><Label>Currency</Label><Input value={giftCardForm.cardCurrency} onChange={(event) => setGiftCardForm((current) => ({ ...current, cardCurrency: event.target.value.toUpperCase() }))} /></div>
+              <div><Label>Value</Label><Input type="number" value={giftCardForm.cardValue} onChange={(event) => setGiftCardForm((current) => ({ ...current, cardValue: Number(event.target.value) }))} /></div>
+              <div><Label>Rate</Label><Input type="number" value={giftCardForm.rate} onChange={(event) => setGiftCardForm((current) => ({ ...current, rate: Number(event.target.value) }))} placeholder="Use configured rate if blank" /></div>
+              <div><Label>Card code</Label><Input value={giftCardForm.cardCode} onChange={(event) => setGiftCardForm((current) => ({ ...current, cardCode: event.target.value }))} /></div>
+              <div><Label>Card PIN</Label><Input value={giftCardForm.cardPin} onChange={(event) => setGiftCardForm((current) => ({ ...current, cardPin: event.target.value }))} /></div>
+              <div className="md:col-span-2"><Label>Image URL</Label><Input value={giftCardForm.cardImage} onChange={(event) => setGiftCardForm((current) => ({ ...current, cardImage: event.target.value }))} /></div>
+              <div className="md:col-span-2"><Label>Review note</Label><Textarea value={giftCardForm.note} onChange={(event) => setGiftCardForm((current) => ({ ...current, note: event.target.value }))} /></div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateDialog(null)}>Cancel</Button>
+            {createDialog === 'delivery' && <Button onClick={handleCreateDelivery} disabled={actionLoading}>{actionLoading ? 'Creating...' : 'Create Delivery'}</Button>}
+            {createDialog === 'fuel' && <Button onClick={handleCreateFuel} disabled={actionLoading}>{actionLoading ? 'Creating...' : 'Create Fuel/Gas'}</Button>}
+            {createDialog === 'giftcard' && <Button onClick={handleCreateGiftCardSale} disabled={actionLoading}>{actionLoading ? 'Submitting...' : 'Submit Trade'}</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
         <DialogContent className="max-w-2xl">
