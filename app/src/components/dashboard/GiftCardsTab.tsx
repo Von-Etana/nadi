@@ -17,6 +17,8 @@ export const GiftCardsTab = () => {
   const [activeSubTab, setActiveSubTab] = useState<'buy' | 'sell' | 'redeem' | 'history'>('buy');
   const [availableCards, setAvailableCards] = useState<any[]>([]);
   const [rates, setRates] = useState<any>({});
+  const [liveRates, setLiveRates] = useState<any>({});
+  const [liveRatesProvider, setLiveRatesProvider] = useState('unavailable');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,6 +72,8 @@ export const GiftCardsTab = () => {
         
         if (ratesRes.data && ratesRes.data.success) {
           setRates(ratesRes.data.rates || {});
+          setLiveRates(ratesRes.data.liveRates || {});
+          setLiveRatesProvider(ratesRes.data.provider || 'unavailable');
         }
       } catch (err: any) {
         console.error('Error fetching gift cards:', err);
@@ -230,6 +234,19 @@ export const GiftCardsTab = () => {
     return fallbackRates[cardId]?.[currency] || 750;
   };
 
+  const getLiveInfoFor = (cardId: string) => {
+    return liveRates[cardId] || availableCards.find((card) => card.id === cardId) || null;
+  };
+
+  const formatLiveRange = (card: any) => {
+    if (!card) return 'Live product pricing unavailable';
+    const currency = card.recipientCurrency || card.recipientCurrencyCode || card.currencies?.[0] || 'USD';
+    if (Array.isArray(card.fixedValues) && card.fixedValues.length > 0) {
+      return `${currency} ${card.fixedValues.join(', ')}`;
+    }
+    return `${currency} ${card.minValue || 0} - ${card.maxValue || 0}`;
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -309,6 +326,7 @@ export const GiftCardsTab = () => {
                 const design = getCardDesign(card.id);
                 const firstCurrency = card.currencies?.[0] || 'USD';
                 const currentRate = getRateFor(card.id, firstCurrency);
+                const liveInfo = getLiveInfoFor(card.id);
                 return (
                   <div 
                     key={card.id} 
@@ -332,6 +350,7 @@ export const GiftCardsTab = () => {
                     </div>
                     <div>
                       <h3 className="font-bold text-[#1a1a1a]">{card.name}</h3>
+                      <p className="text-[10px] text-[#666] font-semibold mt-1">Live provider range: {formatLiveRange(liveInfo)}</p>
                       <div className="flex justify-between items-baseline mt-1">
                         <span className="text-xs text-[#999]">Rate: ₦{currentRate.toLocaleString()}/$</span>
                         <span className="text-[10px] text-[#666] font-semibold">Min: ${card.minValue} • Max: ${card.maxValue}</span>
@@ -359,11 +378,27 @@ export const GiftCardsTab = () => {
                       {availableCards.find(c => c.id === buyCardType)?.name || buyCardType} Gift Voucher
                     </h4>
                     <p className="text-[10px] text-white/70">
+                      Live: {formatLiveRange(getLiveInfoFor(buyCardType))}
+                    </p>
+                    <p className="text-[10px] text-white/70">
                       Rate: ₦{getRateFor(buyCardType, buyCurrency).toLocaleString()}/{buyCurrency}
                     </p>
                   </div>
                 </div>
               )}
+
+              <div className={`border text-[10px] p-3 rounded-lg flex gap-2 ${
+                liveRatesProvider === 'reloadly'
+                  ? 'bg-green-50 border-green-200 text-green-800'
+                  : 'bg-orange-50 border-orange-200 text-orange-800'
+              }`}>
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <p>
+                  {liveRatesProvider === 'reloadly'
+                    ? 'Buy pricing is loaded from Reloadly product data. Sell payout rates are reviewed and managed by admin.'
+                    : 'Live Reloadly product pricing is unavailable. Buying may be temporarily disabled by the provider.'}
+                </p>
+              </div>
 
               <form onSubmit={handleBuy} className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">

@@ -97,15 +97,25 @@ router.get('/wallet/:asset', auth, async (req, res) => {
     );
 
     // 2. Fetch/generate deposit address from Quidax
-    const address = await quidaxService.getDepositAddress(quidaxUserId, symbol);
+    const addressResult = await quidaxService.getDepositAddress(quidaxUserId, symbol);
 
     res.json({
       success: true,
-      address: address
+      address: addressResult.address,
+      network: addressResult.network,
+      status: addressResult.status,
+      providerAddressId: addressResult.providerAddressId,
+      message: addressResult.message || (addressResult.address ? 'Wallet address ready' : 'Wallet address generation is pending')
     });
   } catch (error) {
     logger.error('Get wallet address error:', error);
-    res.status(500).json({ success: false, message: 'Failed to get wallet address' });
+    const isConfigError = error.message === 'QUIDAX_API_KEY is not configured';
+    res.status(isConfigError ? 503 : 500).json({
+      success: false,
+      message: isConfigError
+        ? 'Crypto provider is not configured. Please contact support.'
+        : (error.response?.data?.message || error.message || 'Failed to get wallet address')
+    });
   }
 });
 

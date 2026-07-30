@@ -34,6 +34,8 @@ function normalizeProduct(product) {
   const minValue = product.minRecipientDenomination || product.minSenderDenomination || product.minValue || 1;
   const maxValue = product.maxRecipientDenomination || product.maxSenderDenomination || product.maxValue || minValue;
   const currency = product.recipientCurrencyCode || product.senderCurrencyCode || product.currency || 'USD';
+  const senderCurrencyCode = product.senderCurrencyCode || product.currency || currency;
+  const recipientCurrencyCode = product.recipientCurrencyCode || currency;
 
   return {
     id: String(product.productId || product.id),
@@ -44,8 +46,34 @@ function normalizeProduct(product) {
     minValue,
     maxValue,
     fixedValues: product.fixedRecipientDenominations || product.fixedSenderDenominations || [],
+    senderCurrencyCode,
+    recipientCurrencyCode,
+    senderFee: product.senderFee || product.fee || 0,
+    discountPercentage: product.discountPercentage || product.discount || 0,
+    denominationType: product.denominationType || (product.fixedRecipientDenominations?.length ? 'FIXED' : 'RANGE'),
     provider: 'reloadly'
   };
+}
+
+function buildLiveProductRates(cards) {
+  return cards.reduce((acc, card) => {
+    acc[card.id] = {
+      productId: card.productId,
+      name: card.name,
+      brand: card.brand,
+      provider: card.provider,
+      senderCurrency: card.senderCurrencyCode,
+      recipientCurrency: card.recipientCurrencyCode,
+      minValue: card.minValue,
+      maxValue: card.maxValue,
+      fixedValues: card.fixedValues,
+      senderFee: card.senderFee,
+      discountPercentage: card.discountPercentage,
+      denominationType: card.denominationType,
+      lastUpdated: new Date().toISOString()
+    };
+    return acc;
+  }, {});
 }
 
 async function getGiftcardSettings() {
@@ -103,7 +131,29 @@ router.get('/available', auth, async (req, res) => {
 router.get('/rates', auth, async (req, res) => {
   try {
     const settings = await getGiftcardSettings();
-    res.json({ success: true, rates: settings.rates || DEFAULT_RATES });
+    let liveRates = {};
+    let provider = 'unavailable';
+
+    try {
+      const products = await reloadly.getGiftCardProducts(process.env.GIFTCARD_COUNTRY_CODE || 'NG');
+      const cards = (products || []).map(normalizeProduct).filter(card => card.id && card.name);
+      liveRates = buildLiveProductRates(cards);
+      provider = 'reloadly';
+    } catch (providerError) {
+      logger.warn('Gift card live product rates unavailable:', providerError.message);
+    }
+
+    res.json({
+      success: true,
+      rates: settings.rates || DEFAULT_RATES,
+      liveRates,
+      provider,
+      source: {
+        sellRates: 'admin_settings',
+        buyCatalog: provider
+      },
+      lastUpdated: new Date().toISOString()
+    });
   } catch (error) {
     logger.error('Get rates error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch rates' });

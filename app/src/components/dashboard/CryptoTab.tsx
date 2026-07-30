@@ -38,6 +38,8 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
   // Wallet address state
   const [selectedWalletCoin, setSelectedWalletCoin] = useState('btc');
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletAddressStatus, setWalletAddressStatus] = useState<'idle' | 'active' | 'pending' | 'error'>('idle');
+  const [walletAddressMessage, setWalletAddressMessage] = useState<string | null>(null);
   const [addressLoading, setAddressLoading] = useState(false);
 
   // Form states
@@ -93,15 +95,22 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
     try {
       setAddressLoading(true);
       setWalletAddress(null);
+      setWalletAddressStatus('idle');
+      setWalletAddressMessage(null);
       const res = await cryptoApi.getWalletAddress(coin);
       if (res.data && res.data.success) {
-        setWalletAddress(res.data.address);
+        const address = typeof res.data.address === 'string' ? res.data.address : null;
+        setWalletAddress(address);
+        setWalletAddressStatus(address ? 'active' : (res.data.status === 'pending' ? 'pending' : 'error'));
+        setWalletAddressMessage(res.data.message || (address ? 'Wallet address ready' : 'Wallet address is not ready yet.'));
       } else {
-        setWalletAddress(res.error || 'Failed to generate address');
+        setWalletAddressStatus('error');
+        setWalletAddressMessage(res.error || 'Failed to generate address');
       }
     } catch (err) {
       console.error(err);
-      setWalletAddress('Address unavailable. Please try again later.');
+      setWalletAddressStatus('error');
+      setWalletAddressMessage('Address unavailable. Please try again later.');
     } finally {
       setAddressLoading(false);
     }
@@ -314,32 +323,57 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
                   <RefreshCw className="w-6 h-6 text-[#ea580c] animate-spin" />
                   <p className="text-xs text-[#666]">Generating deposit address...</p>
                 </div>
-              ) : walletAddress ? (
+              ) : walletAddressStatus === 'active' && walletAddress ? (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-[#666] uppercase">{selectedWalletCoin} Deposit Address</p>
                   <div className="bg-[#f5f5f5] p-3.5 rounded-xl border border-[#e2e2e2] break-all font-mono text-[10px] text-[#1a1a1a] select-all">
                     {walletAddress}
                   </div>
-                  {walletAddress.startsWith('Coming') ? (
-                    <p className="text-[10px] text-orange-500 flex items-center justify-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      Functionality not enabled on test server.
-                    </p>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(walletAddress);
-                        alert('Crypto address copied to clipboard!');
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-bold rounded-lg transition-colors"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      Copy Address
-                    </button>
+                  {walletAddressMessage && (
+                    <p className="text-[10px] text-green-600">{walletAddressMessage}</p>
                   )}
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(walletAddress);
+                      alert('Crypto address copied to clipboard!');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-bold rounded-lg transition-colors"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Address
+                  </button>
+                </div>
+              ) : walletAddressStatus === 'pending' ? (
+                <div className="space-y-3 py-3">
+                  <AlertCircle className="w-6 h-6 text-orange-500 mx-auto" />
+                  <div>
+                    <p className="text-xs font-semibold text-[#1a1a1a]">Address generation is pending</p>
+                    <p className="text-[11px] text-[#666] mt-1">
+                      {walletAddressMessage || 'The provider accepted the request. Refresh this coin shortly to fetch the address.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => fetchWalletAddress(selectedWalletCoin)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#f5f5f5] hover:bg-[#e2e2e2] text-[#1a1a1a] text-xs font-bold rounded-lg transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Check Again
+                  </button>
                 </div>
               ) : (
-                <p className="text-xs text-red-500">Failed to load deposit details.</p>
+                <div className="space-y-3 py-3">
+                  <AlertCircle className="w-6 h-6 text-red-500 mx-auto" />
+                  <p className="text-xs text-red-500">
+                    {walletAddressMessage || 'Failed to load deposit details.'}
+                  </p>
+                  <button
+                    onClick={() => fetchWalletAddress(selectedWalletCoin)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#f5f5f5] hover:bg-[#e2e2e2] text-[#1a1a1a] text-xs font-bold rounded-lg transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Retry
+                  </button>
+                </div>
               )}
             </div>
           </div>
