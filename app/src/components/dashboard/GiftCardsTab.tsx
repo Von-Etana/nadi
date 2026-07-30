@@ -12,6 +12,16 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { giftCardsApi } from '@/services/api';
+import {
+  AmazonIcon,
+  AppleIcon,
+  GooglePlayIcon,
+  SteamIcon,
+  XboxIcon,
+  PlaystationIcon,
+  NetflixIcon,
+  SpotifyIcon
+} from '@/components/icons';
 
 export const GiftCardsTab = () => {
   const [activeSubTab, setActiveSubTab] = useState<'buy' | 'sell' | 'redeem' | 'history'>('buy');
@@ -108,27 +118,24 @@ export const GiftCardsTab = () => {
 
   const handleBuy = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!buyCardType || !buyAmount || !buyCurrency) {
-      setBuyError('Please fill in all fields');
-      return;
-    }
+    if (!buyCardType || !buyAmount) return;
     try {
       setBuyLoading(true);
-      setBuyError(null);
       setBuySuccess(null);
+      setBuyError(null);
       const res = await giftCardsApi.buyCard({
         cardType: buyCardType,
         amount: parseFloat(buyAmount),
         currency: buyCurrency
       });
       if (res.data && res.data.success) {
-        setBuySuccess(res.data.message || 'Gift card purchased successfully.');
+        setBuySuccess(res.data.message || 'Gift card purchase successful!');
         setBuyAmount('');
       } else {
-        setBuyError(res.error || 'Failed to purchase gift card');
+        setBuyError(res.error || 'Gift card purchase failed');
       }
     } catch (err: any) {
-      setBuyError(err.message || 'Failed to purchase gift card');
+      setBuyError(err.message || 'Gift card purchase failed');
     } finally {
       setBuyLoading(false);
     }
@@ -136,14 +143,11 @@ export const GiftCardsTab = () => {
 
   const handleSell = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sellCardType || !sellAmount || !sellCurrency || !sellCode) {
-      setSellError('Please fill in all required fields');
-      return;
-    }
+    if (!sellCardType || !sellAmount || (!sellCode && !sellImage)) return;
     try {
       setSellLoading(true);
-      setSellError(null);
       setSellSuccess(null);
+      setSellError(null);
       const res = await giftCardsApi.sellCard({
         cardType: sellCardType,
         amount: parseFloat(sellAmount),
@@ -153,16 +157,16 @@ export const GiftCardsTab = () => {
         cardImage: sellImage || undefined
       });
       if (res.data && res.data.success) {
-        setSellSuccess(res.data.message || 'Gift card sale request submitted successfully!');
+        setSellSuccess(res.data.message || 'Gift card submitted for trade! Funds will be credited once verified.');
         setSellAmount('');
         setSellCode('');
         setSellPin('');
         setSellImage(null);
       } else {
-        setSellError(res.error || 'Failed to submit gift card for sale');
+        setSellError(res.error || 'Failed to submit gift card trade');
       }
     } catch (err: any) {
-      setSellError(err.message || 'Failed to submit gift card for sale');
+      setSellError(err.message || 'Failed to submit gift card trade');
     } finally {
       setSellLoading(false);
     }
@@ -170,10 +174,7 @@ export const GiftCardsTab = () => {
 
   const handleRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!redeemCode) {
-      setRedeemError('Redemption code is required');
-      return;
-    }
+    if (!redeemCode) return;
     try {
       setRedeemLoading(true);
       setRedeemError(null);
@@ -195,25 +196,25 @@ export const GiftCardsTab = () => {
   const getCardDesign = (cardId: string) => {
     switch (cardId) {
       case 'amazon':
-        return { color: 'bg-gradient-to-br from-[#111] to-[#333]', logo: '🛒', theme: 'text-[#FF9900]' };
+        return { color: 'bg-gradient-to-br from-[#111111] to-[#232f3e]', logo: <AmazonIcon className="w-7 h-7 text-[#FF9900]" />, theme: 'text-[#FF9900]' };
       case 'itunes':
       case 'apple':
-        return { color: 'bg-gradient-to-br from-[#6b21a8] to-[#db2777]', logo: '🍎', theme: 'text-white' };
+        return { color: 'bg-gradient-to-br from-[#1c1c1e] to-[#2c2c2e]', logo: <AppleIcon className="w-7 h-7 text-white" />, theme: 'text-white' };
       case 'google-play':
       case 'google':
-        return { color: 'bg-gradient-to-br from-[#1e3a8a] to-[#3b82f6]', logo: '▶️', theme: 'text-[#4285F4]' };
+        return { color: 'bg-gradient-to-br from-[#1e3a8a] to-[#3b82f6]', logo: <GooglePlayIcon className="w-7 h-7" />, theme: 'text-[#4285F4]' };
       case 'steam':
-        return { color: 'bg-gradient-to-br from-[#0f172a] to-[#1e293b]', logo: '🎮', theme: 'text-[#1b2838]' };
+        return { color: 'bg-gradient-to-br from-[#0f172a] to-[#1e293b]', logo: <SteamIcon className="w-7 h-7 text-white" />, theme: 'text-[#1b2838]' };
       case 'xbox':
-        return { color: 'bg-gradient-to-br from-[#14532d] to-[#16a34a]', logo: '💚', theme: 'text-white' };
+        return { color: 'bg-gradient-to-br from-[#14532d] to-[#16a34a]', logo: <XboxIcon className="w-7 h-7 text-white" />, theme: 'text-white' };
       case 'playstation':
-        return { color: 'bg-gradient-to-br from-[#1e40af] to-[#1d4ed8]', logo: '💙', theme: 'text-white' };
+        return { color: 'bg-gradient-to-br from-[#1e40af] to-[#1d4ed8]', logo: <PlaystationIcon className="w-7 h-7 text-white" />, theme: 'text-white' };
       case 'netflix':
-        return { color: 'bg-gradient-to-br from-[#991b1b] to-[#dc2626]', logo: '📺', theme: 'text-[#E50914]' };
+        return { color: 'bg-gradient-to-br from-[#111111] to-[#1e0000]', logo: <NetflixIcon className="w-7 h-7" />, theme: 'text-[#E50914]' };
       case 'spotify':
-        return { color: 'bg-gradient-to-br from-[#064e3b] to-[#10b981]', logo: '🎵', theme: 'text-[#1DB954]' };
+        return { color: 'bg-gradient-to-br from-[#064e3b] to-[#10b981]', logo: <SpotifyIcon className="w-7 h-7" />, theme: 'text-[#1DB954]' };
       default:
-        return { color: 'bg-gradient-to-br from-[#ea580c] to-[#f97316]', logo: '🎁', theme: 'text-white' };
+        return { color: 'bg-gradient-to-br from-[#ea580c] to-[#f97316]', logo: <Gift className="w-7 h-7 text-white" />, theme: 'text-white' };
     }
   };
 

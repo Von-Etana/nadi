@@ -1,0 +1,16 @@
+export { default as BitcoinIcon } from './bitcoin';
+export { default as EthereumIcon } from './ethereum';
+export { default as TetherIcon } from './tether';
+export { default as AmazonIcon } from './amazon';
+export { default as AppleIcon } from './apple';
+export { default as GooglePlayIcon } from './google-play';
+export { default as SteamIcon } from './steam';
+export { default as XboxIcon } from './xbox';
+export { default as PlaystationIcon } from './playstation';
+export { default as NetflixIcon } from './netflix';
+export { default as SpotifyIcon } from './spotify';
+export { default as TwitterIcon } from './twitter';
+export { default as InstagramIcon } from './instagram';
+export { default as FacebookIcon } from './facebook';
+export { default as YoutubeIcon } from './youtube';
+export { default as LinkedinIcon } from './linkedin';

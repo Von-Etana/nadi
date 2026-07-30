@@ -11,6 +11,23 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cryptoApi } from '@/services/api';
+import { BitcoinIcon, EthereumIcon, TetherIcon } from '@/components/icons';
+
+const getCryptoSvgIcon = (symbol: string, className = "w-8 h-8") => {
+  switch (symbol.toLowerCase()) {
+    case 'btc':
+    case 'bitcoin':
+      return <BitcoinIcon className={className} />;
+    case 'eth':
+    case 'ethereum':
+      return <EthereumIcon className={className} />;
+    case 'usdt':
+    case 'tether':
+      return <TetherIcon className={className} />;
+    default:
+      return null;
+  }
+};
 
 interface CryptoTabProps {
   cryptoBalance: number;
@@ -183,15 +200,6 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
     }
   };
 
-  const getCryptoIconColor = (symbol: string) => {
-    switch (symbol.toLowerCase()) {
-      case 'btc': return 'bg-[#F7931A]';
-      case 'eth': return 'bg-[#627EEA]';
-      case 'usdt': return 'bg-[#26A17B]';
-      default: return 'bg-gradient-primary';
-    }
-  };
-
   // Compute total crypto balance in Naira
   const totalCryptoNaira = cryptos.reduce((total, coin) => total + (coin.balance * coin.price), 0);
 
@@ -275,8 +283,8 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
               {cryptos.map((crypto) => (
                 <div key={crypto.id} className="flex items-center justify-between p-3.5 rounded-xl hover:bg-[#f9f9f9] transition-colors border border-transparent hover:border-[#e2e2e2]/40">
                   <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-full ${getCryptoIconColor(crypto.symbol)} flex items-center justify-center text-white font-extrabold text-sm shadow-sm`}>
-                      {crypto.symbol}
+                    <div className="w-12 h-12 rounded-full flex items-center justify-center shadow-sm overflow-hidden flex-shrink-0">
+                      {getCryptoSvgIcon(crypto.symbol, "w-12 h-12")}
                     </div>
                     <div>
                       <p className="font-semibold text-[#1a1a1a] text-sm">{crypto.name}</p>
@@ -410,12 +418,13 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
                     key={coin.id}
                     type="button"
                     onClick={() => setSelectedCoin(coin.id)}
-                    className={`p-3 border rounded-xl transition-all text-center ${
+                    className={`p-3 border rounded-xl transition-all text-center flex flex-col items-center justify-center ${
                       selectedCoin === coin.id
                         ? 'border-[#ea580c] bg-[#ea580c]/5 shadow-sm'
                         : 'border-[#e2e2e2] hover:border-[#ea580c] bg-white'
                     }`}
                   >
+                    <div className="mb-1">{getCryptoSvgIcon(coin.symbol, "w-6 h-6")}</div>
                     <p className="font-extrabold text-sm text-[#1a1a1a]">{coin.symbol}</p>
                     <p className="text-[10px] text-[#999] truncate">{coin.name}</p>
                   </button>
@@ -434,13 +443,14 @@ export const CryptoTab = ({ cryptoBalance: initialCryptoBalance }: CryptoTabProp
                       type="button"
                       disabled={selectedCoin === coin.id}
                       onClick={() => setSwapToCoin(coin.id)}
-                      className={`p-3 border rounded-xl transition-all text-center ${
+                      className={`p-3 border rounded-xl transition-all text-center flex flex-col items-center justify-center ${
                         selectedCoin === coin.id ? 'opacity-40 cursor-not-allowed border-[#e2e2e2]' :
                         swapToCoin === coin.id
                           ? 'border-[#ea580c] bg-[#ea580c]/5 shadow-sm'
                           : 'border-[#e2e2e2] hover:border-[#ea580c] bg-white'
                       }`}
                     >
+                      <div className="mb-1">{getCryptoSvgIcon(coin.symbol, "w-6 h-6")}</div>
                       <p className="font-extrabold text-sm text-[#1a1a1a]">{coin.symbol}</p>
                       <p className="text-[10px] text-[#999] truncate">{coin.name}</p>
                     </button>

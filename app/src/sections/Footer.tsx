@@ -1,6 +1,7 @@
-import { Twitter, Linkedin, Instagram, Facebook, Youtube, Send } from 'lucide-react';
+import { Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { TwitterIcon, InstagramIcon, FacebookIcon, YoutubeIcon, LinkedinIcon } from '@/components/icons';
 
 const Footer = () => {
   const footerLinks = {
@@ -32,11 +33,11 @@ const Footer = () => {
   };
 
   const socialLinks = [
-    { icon: Twitter, href: 'https://twitter.com/Nadigroup_', label: 'Twitter', username: '@Nadigroup_' },
-    { icon: Instagram, href: 'https://instagram.com/Nadigroup_', label: 'Instagram', username: '@Nadigroup_' },
-    { icon: Facebook, href: 'https://facebook.com/Nadigroup', label: 'Facebook', username: '@Nadigroup' },
-    { icon: Youtube, href: 'https://youtube.com/@Nadigroup', label: 'YouTube', username: '@Nadigroup' },
-    { icon: Linkedin, href: 'https://linkedin.com/company/nadigroup', label: 'LinkedIn', username: 'Nadi Group' },
+    { icon: TwitterIcon, href: 'https://twitter.com/Nadigroup_', label: 'Twitter', username: '@Nadigroup_' },
+    { icon: InstagramIcon, href: 'https://instagram.com/Nadigroup_', label: 'Instagram', username: '@Nadigroup_' },
+    { icon: FacebookIcon, href: 'https://facebook.com/Nadigroup', label: 'Facebook', username: '@Nadigroup' },
+    { icon: YoutubeIcon, href: 'https://youtube.com/@Nadigroup', label: 'YouTube', username: '@Nadigroup' },
+    { icon: LinkedinIcon, href: 'https://linkedin.com/company/nadigroup', label: 'LinkedIn', username: 'Nadi Group' },
   ];
 
   return (
