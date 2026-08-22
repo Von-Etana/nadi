@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Wallet, 
@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
+import { toast } from 'sonner';
 
 // Import modular split components
 import { OverviewTab } from '@/components/dashboard/OverviewTab';
@@ -28,6 +30,7 @@ import { CryptoTab } from '@/components/dashboard/CryptoTab';
 import { FuelTab } from '@/components/dashboard/FuelTab';
 import { HistoryTab } from '@/components/dashboard/HistoryTab';
 import { SettingsTab } from '@/components/dashboard/SettingsTab';
+import { LiveChatWidget } from '@/components/LiveChatWidget';
 
 type TabType = 'overview' | 'wallet' | 'delivery' | 'utilities' | 'giftcards' | 'crypto' | 'fuel' | 'history' | 'settings';
 
@@ -38,6 +41,42 @@ const Dashboard = () => {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [showBalance, setShowBalance] = useState(true);
   const [notifications] = useState(3);
+  const [realtimeTick, setRealtimeTick] = useState(0);
+
+  // Supabase Realtime Subscriptions for live updates
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`user-realtime-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT') {
+            toast.info(payload.new?.title || 'New Notification', {
+              description: payload.new?.message
+            });
+            setRealtimeTick((t) => t + 1);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'transactions', filter: `user_id=eq.${user.id}` },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            toast.success(`Transaction ${payload.new?.status?.toUpperCase() || 'UPDATED'}: ₦${Number(payload.new?.amount || 0).toLocaleString()}`);
+            setRealtimeTick((t) => t + 1);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const sidebarItems = [
     { id: 'overview', label: 'Overview', icon: Home },
@@ -176,6 +215,7 @@ const Dashboard = () => {
         <div className="p-6">
           {activeTab === 'overview' && (
             <OverviewTab 
+              key={`overview-${realtimeTick}`}
               showBalance={showBalance}
               setShowBalance={setShowBalance}
               setActiveTab={setActiveTab}
@@ -183,22 +223,26 @@ const Dashboard = () => {
           )}
           {activeTab === 'wallet' && (
             <WalletTab 
+              key={`wallet-${realtimeTick}`}
               balance={defaultBalance} 
               showBalance={showBalance}
               setShowBalance={setShowBalance}
             />
           )}
-          {activeTab === 'delivery' && <DeliveryTab />}
-          {activeTab === 'utilities' && <UtilitiesTab />}
-          {activeTab === 'giftcards' && <GiftCardsTab />}
+          {activeTab === 'delivery' && <DeliveryTab key={`delivery-${realtimeTick}`} />}
+          {activeTab === 'utilities' && <UtilitiesTab key={`utilities-${realtimeTick}`} />}
+          {activeTab === 'giftcards' && <GiftCardsTab key={`giftcards-${realtimeTick}`} />}
           {activeTab === 'crypto' && (
-            <CryptoTab cryptoBalance={defaultCryptoBalance} />
+            <CryptoTab key={`crypto-${realtimeTick}`} cryptoBalance={defaultCryptoBalance} />
           )}
-          {activeTab === 'fuel' && <FuelTab />}
-          {activeTab === 'history' && <HistoryTab />}
-          {activeTab === 'settings' && <SettingsTab user={user} />}
+          {activeTab === 'fuel' && <FuelTab key={`fuel-${realtimeTick}`} />}
+          {activeTab === 'history' && <HistoryTab key={`history-${realtimeTick}`} />}
+          {activeTab === 'settings' && <SettingsTab key={`settings-${realtimeTick}`} user={user} />}
         </div>
       </main>
+
+      {/* Floating Real-Time Support Chat */}
+      <LiveChatWidget />
     </div>
   );
 };

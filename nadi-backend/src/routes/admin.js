@@ -319,6 +319,32 @@ router.put('/users/:id', async (req, res) => {
     delete user.two_factor_auth;
 
     logger.info(`Admin ${req.user.email} updated user ${user.email}: ${JSON.stringify(updates)}`);
+
+    // Dispatch real-time user notification on status / role / KYC changes
+    if (updates.kyc_status) {
+      await createNotification({
+        user_id: user.id,
+        type: 'account',
+        title: `KYC Status: ${updates.kyc_status.toUpperCase()}`,
+        message: updates.kyc_status === 'verified'
+          ? 'Your KYC verification has been approved. You now have full platform access.'
+          : `Your KYC status has been updated to ${updates.kyc_status}.`,
+        related_to: { table: 'users', id: user.id }
+      }).catch(err => logger.error('User KYC update notification error:', err));
+    }
+
+    if (updates.is_active !== undefined) {
+      await createNotification({
+        user_id: user.id,
+        type: 'account',
+        title: updates.is_active ? 'Account Activated' : 'Account Deactivated',
+        message: updates.is_active
+          ? 'Your Nadi Digital account has been activated.'
+          : 'Your Nadi Digital account has been deactivated by administrator.',
+        related_to: { table: 'users', id: user.id }
+      }).catch(err => logger.error('User status update notification error:', err));
+    }
+
     res.json({ success: true, message: 'User updated', user });
   } catch (error) {
     logger.error('Admin update user error:', error);
@@ -345,10 +371,127 @@ router.post('/users/:id/suspend', async (req, res) => {
     }
 
     logger.info(`Admin ${req.user.email} suspended user ${user.email}: ${reason || 'No reason provided'}`);
+
+    await createNotification({
+      user_id: user.id,
+      type: 'account',
+      title: 'Account Suspended',
+      message: `Your account has been suspended. Reason: ${reason || 'Administrative review'}`,
+      related_to: { table: 'users', id: user.id }
+    }).catch(err => logger.error('User suspension notification error:', err));
+
     res.json({ success: true, message: 'User suspended' });
   } catch (error) {
     logger.error('Admin suspend user error:', error);
     res.status(500).json({ success: false, message: 'Failed to suspend user' });
+  }
+});
+
+// @route   POST /api/v1/admin/users/:id/wallet-adjust
+// @desc    Manually credit or debit a user's wallet with audit trail
+// @access  Admin
+router.post('/users/:id/wallet-adjust', async (req, res) => {
+  try {
+    const { type, amount, reason } = req.body;
+    const numericAmount = parsePositiveNumber(amount);
+    const normalizedType = normalizeAdminText(type).toLowerCase();
+    const explanation = normalizeAdminText(reason);
+
+    if (!['credit', 'debit'].includes(normalizedType)) {
+      return res.status(400).json({ success: false, message: 'Adjustment type must be credit or debit' });
+    }
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'A positive adjustment amount is required' });
+    }
+    if (!explanation) {
+      return res.status(400).json({ success: false, message: 'A reason for wallet adjustment is required' });
+    }
+
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id,email,first_name,last_name')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (userError || !user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const reference = adminReference('NADI-ADJ-ADMIN');
+    let rpcResult = null;
+
+    if (normalizedType === 'credit') {
+      const { data, error } = await supabase.rpc('execute_wallet_credit', {
+        p_user_id: user.id,
+        p_amount: numericAmount,
+        p_ref: reference,
+        p_type: 'admin_adjustment',
+        p_category: 'wallet',
+        p_description: `Admin Credit: ${explanation}`,
+        p_details: {
+          adjustedBy: req.user.id,
+          adminEmail: req.user.email,
+          reason: explanation,
+          type: 'credit'
+        }
+      });
+      if (error || !data?.success) {
+        return res.status(400).json({ success: false, message: error?.message || 'Failed to credit user wallet' });
+      }
+      rpcResult = data;
+    } else {
+      const { data, error } = await supabase.rpc('execute_wallet_debit', {
+        p_user_id: user.id,
+        p_amount: numericAmount,
+        p_ref: reference,
+        p_type: 'admin_adjustment',
+        p_category: 'wallet',
+        p_description: `Admin Debit: ${explanation}`,
+        p_details: {
+          adjustedBy: req.user.id,
+          adminEmail: req.user.email,
+          reason: explanation,
+          type: 'debit'
+        }
+      });
+      if (error || !data?.success) {
+        return res.status(400).json({ success: false, message: error?.message || 'Failed to debit user wallet. Insufficient balance.' });
+      }
+      rpcResult = data;
+    }
+
+    // Mark transaction completed
+    if (rpcResult?.tx_id) {
+      await supabase
+        .from('transactions')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', rpcResult.tx_id);
+    }
+
+    // Notify the user
+    await createNotification({
+      user_id: user.id,
+      type: 'wallet',
+      title: normalizedType === 'credit' ? 'Wallet Credited' : 'Wallet Debited',
+      message: `Your wallet was ${normalizedType}ed with ₦${numericAmount.toLocaleString()}. Reason: ${explanation}`,
+      related_to: { table: 'transactions', id: rpcResult.tx_id }
+    }).catch(err => logger.error('Wallet adjust notification error:', err));
+
+    logger.info(`Admin ${req.user.email} adjusted wallet for ${user.email} (${normalizedType} ₦${numericAmount}): ${explanation}`);
+
+    res.json({
+      success: true,
+      message: `User wallet successfully ${normalizedType}ed`,
+      reference,
+      transactionId: rpcResult.tx_id,
+      balance: rpcResult.balance
+    });
+  } catch (error) {
+    logger.error('Admin wallet adjustment error:', error);
+    res.status(500).json({ success: false, message: 'Failed to adjust user wallet' });
   }
 });
 
@@ -357,11 +500,16 @@ router.post('/users/:id/suspend', async (req, res) => {
 // @access  Admin
 router.get('/transactions', async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, type } = req.query;
-    let query = supabase.from('transactions').select('*, user:users(first_name, last_name, email)', { count: 'exact' });
+    const { page = 1, limit = 20, status, type, category, search } = req.query;
+    let query = supabase.from('transactions').select('*, user:users(first_name, last_name, email, phone)', { count: 'exact' });
 
-    if (status) query = query.eq('status', status);
-    if (type) query = query.eq('type', type);
+    if (status && status !== 'all') query = query.eq('status', status);
+    if (type && type !== 'all') query = query.eq('type', type);
+    if (category && category !== 'all') query = query.eq('category', category);
+    if (search) {
+      const needle = String(search).trim();
+      query = query.or(`reference.ilike.%${needle}%,description.ilike.%${needle}%`);
+    }
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
@@ -409,6 +557,71 @@ router.get('/transactions/:id', async (req, res) => {
   } catch (error) {
     logger.error('Admin get transaction error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch transaction' });
+  }
+});
+
+// @route   PATCH /api/v1/admin/transactions/:id/status
+// @desc    Update/resolve transaction status
+// @access  Admin
+router.patch('/transactions/:id/status', async (req, res) => {
+  try {
+    const { status, note } = req.body;
+    const allowed = ['completed', 'failed', 'reversed', 'pending'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid transaction status' });
+    }
+
+    const { data: tx, error: fetchErr } = await supabase
+      .from('transactions')
+      .select('*, user:users(id, email, first_name, last_name)')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (fetchErr || !tx) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+
+    const updates = {
+      status,
+      details: {
+        ...(tx.details || {}),
+        resolvedBy: req.user.id,
+        resolvedAt: new Date().toISOString(),
+        adminNote: note || null
+      },
+      updated_at: new Date().toISOString()
+    };
+
+    if (status === 'completed' && !tx.completed_at) {
+      updates.completed_at = new Date().toISOString();
+    }
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('transactions')
+      .update(updates)
+      .eq('id', tx.id)
+      .select('*, user:users(first_name, last_name, email, phone)')
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    // Send user notification on transaction resolution
+    if (tx.user_id) {
+      await createNotification({
+        user_id: tx.user_id,
+        type: 'transaction',
+        title: `Transaction ${status.toUpperCase()}`,
+        message: `Your transaction ${tx.reference || tx.id} for ₦${Number(tx.amount || 0).toLocaleString()} is now marked as ${status}.`,
+        related_to: { table: 'transactions', id: tx.id }
+      }).catch(err => logger.error('Transaction resolution notification error:', err));
+    }
+
+    logger.info(`Admin ${req.user.email} updated transaction ${tx.reference || tx.id} to ${status}: ${note || ''}`);
+
+    res.json({ success: true, message: `Transaction status updated to ${status}`, transaction: updated });
+  } catch (error) {
+    logger.error('Admin update transaction status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update transaction status' });
   }
 });
 
@@ -1368,7 +1581,7 @@ router.put('/settings', authorize('super_admin'), async (req, res) => {
   try {
     const updates = req.body.settings || req.body;
     const entries = Object.entries(updates)
-      .filter(([key]) => ['platform', 'fuel', 'giftcards'].includes(key))
+      .filter(([key]) => ['platform', 'fuel', 'giftcards', 'crypto'].includes(key))
       .map(([key, value]) => ({
         key,
         value,
@@ -1391,6 +1604,96 @@ router.put('/settings', authorize('super_admin'), async (req, res) => {
   } catch (error) {
     logger.error('Update settings error:', error);
     res.status(500).json({ success: false, message: 'Failed to update settings' });
+  }
+});
+
+// @route   GET /api/v1/admin/export
+// @desc    Export transactions, users, or operations as CSV
+// @access  Admin
+router.get('/export', async (req, res) => {
+  try {
+    const { type = 'transactions' } = req.query;
+    let csvData = '';
+    const filename = `nadi_${type}_export_${Date.now()}.csv`;
+
+    if (type === 'transactions') {
+      const { data: rows } = await supabase
+        .from('transactions')
+        .select('*, user:users(first_name, last_name, email, phone)')
+        .order('created_at', { ascending: false })
+        .limit(2000);
+
+      const header = ['Reference', 'Customer Name', 'Customer Email', 'Category', 'Type', 'Amount (NGN)', 'Status', 'Date Created', 'Description'];
+      const body = (rows || []).map(r => [
+        `"${r.reference || r.id}"`,
+        `"${(r.user?.first_name || '') + ' ' + (r.user?.last_name || '')}"`,
+        `"${r.user?.email || ''}"`,
+        `"${r.category || ''}"`,
+        `"${r.type || ''}"`,
+        r.amount || 0,
+        `"${r.status || ''}"`,
+        `"${r.created_at || ''}"`,
+        `"${(r.description || '').replace(/"/g, '""')}"`
+      ].join(','));
+
+      csvData = [header.join(','), ...body].join('\n');
+    } else if (type === 'users') {
+      const { data: rows } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(2000);
+
+      const header = ['User ID', 'First Name', 'Last Name', 'Email', 'Phone', 'Role', 'KYC Status', 'Account Status', 'Date Joined'];
+      const body = (rows || []).map(r => [
+        `"${r.id}"`,
+        `"${r.first_name || ''}"`,
+        `"${r.last_name || ''}"`,
+        `"${r.email || ''}"`,
+        `"${r.phone || ''}"`,
+        `"${r.role || 'user'}"`,
+        `"${r.kyc_status || 'pending'}"`,
+        r.is_active ? 'Active' : 'Suspended',
+        `"${r.created_at || ''}"`
+      ].join(','));
+
+      csvData = [header.join(','), ...body].join('\n');
+    } else if (type === 'operations') {
+      const [logisticsRes, fuelRes] = await Promise.all([
+        supabase.from('shipments').select('*, user:users(first_name, last_name, email)').limit(1000),
+        supabase.from('fuel_orders').select('*, user:users(first_name, last_name, email)').limit(1000)
+      ]);
+
+      const header = ['Order Number', 'Module', 'Customer', 'Status', 'Driver / Assigned', 'Date Created'];
+      const logisticsRows = (logisticsRes.data || []).map(s => [
+        `"${s.tracking_number || s.id}"`,
+        'Logistics Delivery',
+        `"${(s.user?.first_name || '') + ' ' + (s.user?.last_name || '')}"`,
+        `"${s.status || ''}"`,
+        `"${s.assigned_to || 'Unassigned'}"`,
+        `"${s.created_at || ''}"`
+      ].join(','));
+
+      const fuelRows = (fuelRes.data || []).map(f => [
+        `"${f.order_number || f.id}"`,
+        'Fuel & Gas',
+        `"${(f.user?.first_name || '') + ' ' + (f.user?.last_name || '')}"`,
+        `"${f.status || ''}"`,
+        `"${f.assigned_driver || 'Unassigned'}"`,
+        `"${f.created_at || ''}"`
+      ].join(','));
+
+      csvData = [header.join(','), ...logisticsRows, ...fuelRows].join('\n');
+    } else {
+      return res.status(400).json({ success: false, message: 'Unsupported export type' });
+    }
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send(csvData);
+  } catch (error) {
+    logger.error('Export CSV error:', error);
+    res.status(500).json({ success: false, message: 'Failed to export CSV' });
   }
 });
 

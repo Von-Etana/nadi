@@ -270,6 +270,35 @@ export const OverviewTab = ({
           </div>
         )}
       </div>
+
+      {/* Referral & Cashback Engine */}
+      <div className="bg-gradient-to-r from-orange-500 to-amber-500 rounded-3xl p-6 text-white shadow-lg shadow-orange-500/10 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="space-y-1 text-center md:text-left">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 text-xs font-semibold backdrop-blur-sm">
+            <Gift className="w-3.5 h-3.5" />
+            <span>Referral & Rewards Program</span>
+          </div>
+          <h4 className="text-lg font-bold">Invite Friends & Earn Instant Cashback</h4>
+          <p className="text-xs text-orange-100 max-w-md">
+            Share your unique referral code. Earn ₦500 bonus in your Nadi wallet when your invitee completes their first fuel order, gift card trade, or crypto swap!
+          </p>
+        </div>
+        <div className="flex flex-col sm:flex-row items-center gap-2 w-full md:w-auto">
+          <div className="bg-white/15 px-4 py-2 rounded-xl font-mono text-sm font-bold tracking-wider border border-white/20 text-center w-full sm:w-auto">
+            NADI-{(Math.random().toString(36).substring(2, 6)).toUpperCase()}
+          </div>
+          <button
+            onClick={() => {
+              const dummyCode = `NADI-VIP${Math.floor(1000 + Math.random() * 9000)}`;
+              navigator.clipboard?.writeText(`https://nadi.digital/register?ref=${dummyCode}`);
+              alert('Referral link copied to clipboard!');
+            }}
+            className="bg-white text-orange-600 hover:bg-orange-50 active:scale-95 font-bold text-xs px-4 py-2.5 rounded-xl transition-all shadow-sm whitespace-nowrap w-full sm:w-auto"
+          >
+            Copy Invite Link
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

@@ -761,4 +761,135 @@ router.post('/shipments/:id/cancel', auth, async (req, res) => {
   }
 });
 
+// @route   GET /api/v1/logistics/driver/tasks
+// @desc    Get delivery and fuel fulfillment tasks assigned to driver
+// @access  Private
+router.get('/driver/tasks', auth, async (req, res) => {
+  try {
+    const userIdentifier = req.user.id;
+    const userEmail = req.user.email;
+    const userName = `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim();
+
+    // Query logistics shipments and fuel orders
+    const [shipmentsRes, fuelRes] = await Promise.all([
+      supabase
+        .from('shipments')
+        .select('*, user:users(first_name, last_name, email, phone)')
+        .or(`assigned_to.eq.${userIdentifier},assigned_to.ilike.%${userEmail}%,assigned_to.ilike.%${userName}%`)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('fuel_orders')
+        .select('*, user:users(first_name, last_name, email, phone)')
+        .or(`assigned_driver.eq.${userIdentifier},assigned_driver.ilike.%${userEmail}%,assigned_driver.ilike.%${userName}%`)
+        .order('created_at', { ascending: false })
+    ]);
+
+    const tasks = [
+      ...(shipmentsRes.data || []).map(s => ({
+        id: s.id,
+        orderNumber: s.tracking_number || s.order_number || s.id,
+        module: 'logistics',
+        title: `${s.delivery_category || 'Parcel'} Delivery (${s.service_type || 'Standard'})`,
+        status: s.status,
+        customerName: s.user ? `${s.user.first_name || ''} ${s.user.last_name || ''}`.trim() : s.recipient_name || 'Customer',
+        customerPhone: s.recipient_phone || s.user?.phone || '',
+        pickupAddress: s.pickup_address || 'Warehouse / Hub',
+        deliveryAddress: s.delivery_address || s.destination_address || 'Address provided',
+        what3words: s.delivery_what3words || s.what3words || '',
+        amount: s.amount || s.fee || 0,
+        notes: s.notes || s.special_instructions || '',
+        createdAt: s.created_at,
+        proofOfDelivery: s.proof_of_delivery || null
+      })),
+      ...(fuelRes.data || []).map(f => ({
+        id: f.id,
+        orderNumber: f.order_number || f.id,
+        module: 'fuel',
+        title: `${f.fuel_type?.toUpperCase() || 'Fuel'} / Gas Delivery (${f.quantity || 1} units)`,
+        status: f.status,
+        customerName: f.user ? `${f.user.first_name || ''} ${f.user.last_name || ''}`.trim() : 'Customer',
+        customerPhone: f.user?.phone || '',
+        pickupAddress: 'Depot / Station Station',
+        deliveryAddress: f.delivery_address || 'Address provided',
+        what3words: f.what3words || '',
+        amount: f.total_price || f.amount || 0,
+        notes: f.delivery_instructions || '',
+        createdAt: f.created_at,
+        proofOfDelivery: f.proof_of_delivery || null
+      }))
+    ];
+
+    // Sort by creation descending
+    tasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    res.json({ success: true, tasks });
+  } catch (error) {
+    logger.error('Driver tasks fetch error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch driver tasks' });
+  }
+});
+
+// @route   PATCH /api/v1/logistics/driver/tasks/:id
+// @desc    Update delivery task status and attach Proof of Delivery
+// @access  Private
+router.patch('/driver/tasks/:id', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, note, proofUrl, module = 'logistics' } = req.body;
+
+    const allowed = ['accepted', 'picked_up', 'in_transit', 'delivered', 'failed'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid task status' });
+    }
+
+    const table = module === 'fuel' ? 'fuel_orders' : 'shipments';
+    const { data: order, error: fetchErr } = await supabase
+      .from(table)
+      .select('*, user:users(id, email, first_name, last_name)')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr || !order) {
+      return res.status(404).json({ success: false, message: 'Task order not found' });
+    }
+
+    const updates = {
+      status,
+      updated_at: new Date().toISOString()
+    };
+
+    if (proofUrl || note) {
+      updates.proof_of_delivery = {
+        url: proofUrl || null,
+        note: note || '',
+        submittedAt: new Date().toISOString(),
+        driverName: `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim()
+      };
+    }
+
+    await supabase
+      .from(table)
+      .update(updates)
+      .eq('id', id);
+
+    // Notify customer
+    const targetUserId = order.user_id || order.user?.id;
+    if (targetUserId) {
+      await createNotification({
+        user: { id: targetUserId, email: order.user?.email, first_name: order.user?.first_name },
+        type: 'logistics',
+        title: `Order Status: ${status.replace('_', ' ').toUpperCase()}`,
+        message: `Your ${module === 'fuel' ? 'fuel/gas order' : 'package delivery'} (${order.order_number || order.tracking_number || id}) is now ${status.replace('_', ' ')}.`,
+        relatedTo: { table, id },
+        channels: { inApp: true, email: true, sms: true }
+      }).catch(err => logger.warn('Driver task notification warning:', err));
+    }
+
+    res.json({ success: true, message: `Task marked as ${status}`, status });
+  } catch (error) {
+    logger.error('Driver task update error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update task' });
+  }
+});
+
 module.exports = router;

@@ -4,9 +4,10 @@ import {
   ArrowUpRight, 
   ArrowDownLeft, 
   Check, 
+  CheckCircle,
   AlertCircle,
   Upload,
-  CreditCard,
+  X,
   History
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -598,9 +599,24 @@ export const GiftCardsTab = () => {
                     className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                   />
                   {sellImage ? (
-                    <div className="flex items-center gap-3 justify-center text-xs text-[#ea580c] font-semibold">
-                      <CreditCard className="w-5 h-5 text-[#ea580c]" />
-                      <span>Card Image Uploaded</span>
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="relative w-32 h-20 rounded-lg overflow-hidden border border-[#ea580c]/40 shadow-sm">
+                        <img src={sellImage} alt="Gift card preview" className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            setSellImage(null);
+                          }}
+                          className="absolute top-1 right-1 bg-black/70 text-white rounded-full p-1 hover:bg-black"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <span className="text-[11px] text-[#ea580c] font-semibold flex items-center gap-1">
+                        <CheckCircle className="w-3.5 h-3.5" /> Image Attached (Click to change)
+                      </span>
                     </div>
                   ) : (
                     <div className="space-y-1">

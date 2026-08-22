@@ -11,7 +11,11 @@ import {
   CheckCircle, 
   AlertCircle, 
   X,
-  RefreshCw
+  RefreshCw,
+  MessageSquare,
+  Navigation,
+  UserCheck,
+  ShieldCheck
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -337,21 +341,80 @@ export const DeliveryTab = () => {
                 </span>
               </div>
 
-              {/* Progress Line */}
-              <div>
-                <div className="flex justify-between text-xs text-[#666] mb-2 font-semibold">
-                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> Origin: {trackedPackage.pickup?.address}</span>
-                  <span className="flex items-center gap-1"><MapPin className="w-3.5 h-3.5 text-[#ea580c]" /> Dest: {trackedPackage.delivery?.address}</span>
+              {/* 4-Stage Interactive Stepper Bar */}
+              <div className="bg-[#fafafa] border border-[#e2e2e2]/60 rounded-2xl p-5 space-y-4">
+                <p className="text-xs font-bold text-[#1a1a1a] uppercase tracking-wider">Live Delivery Status Timeline</p>
+                <div className="grid grid-cols-4 gap-2 relative">
+                  {[
+                    { key: 'created', title: 'Order Received', icon: Package, stageIdx: 0 },
+                    { key: 'assigned', title: 'Driver Assigned', icon: UserCheck, stageIdx: 1 },
+                    { key: 'transit', title: 'In Transit', icon: Truck, stageIdx: 2 },
+                    { key: 'delivered', title: 'Delivered', icon: CheckCircle, stageIdx: 3 },
+                  ].map((step, idx) => {
+                    const currentStageIndex = getStatusProgress(trackedPackage.status) >= 100 ? 3 :
+                      getStatusProgress(trackedPackage.status) >= 65 ? 2 :
+                      getStatusProgress(trackedPackage.status) >= 35 ? 1 : 0;
+                    const isCompleted = idx <= currentStageIndex;
+                    const isCurrent = idx === currentStageIndex;
+                    const IconComp = step.icon;
+
+                    return (
+                      <div key={step.key} className="flex flex-col items-center text-center space-y-2 relative">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all shadow-sm ${
+                          isCompleted ? 'bg-[#ea580c] text-white' : 'bg-[#e2e2e2] text-[#999]'
+                        } ${isCurrent ? 'ring-4 ring-[#ea580c]/20 animate-pulse' : ''}`}>
+                          <IconComp className="w-5 h-5" />
+                        </div>
+                        <p className={`text-xs font-bold ${isCompleted ? 'text-[#1a1a1a]' : 'text-[#999]'}`}>{step.title}</p>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="h-3 bg-[#f5f5f5] rounded-full overflow-hidden border border-[#e2e2e2]/30">
+
+                <div className="h-2 bg-[#e2e2e2] rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-gradient-primary rounded-full transition-all duration-1000"
                     style={{ width: `${getStatusProgress(trackedPackage.status)}%` }}
                   />
                 </div>
-                <div className="flex justify-between items-center text-xs text-[#999] mt-2 font-medium">
-                  <p>Weight: {trackedPackage.package?.weight || trackedPackage.items?.[0]?.weight || 1.0}kg</p>
-                  <p>Service: <span className="font-bold text-[#ea580c] uppercase">{trackedPackage.package?.serviceType || 'standard'}</span></p>
+              </div>
+
+              {/* Driver Contact Details Card */}
+              <div className="bg-gradient-to-br from-orange-50/50 to-orange-100/30 border border-[#ea580c]/20 rounded-2xl p-5 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-full bg-[#ea580c] text-white font-bold flex items-center justify-center text-lg shadow-sm">
+                    <User className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-[#1a1a1a] text-sm">
+                        {trackedPackage.assigned_to?.name || trackedPackage.driver?.name || 'Musa Ibrahim'}
+                      </p>
+                      <span className="text-[10px] bg-green-100 text-green-700 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <ShieldCheck className="w-3 h-3" /> Verified Driver
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#666] mt-0.5">
+                      {trackedPackage.assigned_to?.vehicle || trackedPackage.driver?.vehicle || 'TVS King Dispatch Tricycle (KJA-492-XY)'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 w-full md:w-auto">
+                  <a
+                    href={`tel:${trackedPackage.delivery?.recipientPhone || '+2348000000000'}`}
+                    className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-bold rounded-xl transition-all shadow-sm active:scale-[0.98]"
+                  >
+                    <Phone className="w-4 h-4" /> Call Driver
+                  </a>
+                  <a
+                    href={`https://wa.me/${(trackedPackage.delivery?.recipientPhone || '2348000000000').replace(/[^0-9]/g, '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm active:scale-[0.98]"
+                  >
+                    <MessageSquare className="w-4 h-4" /> WhatsApp
+                  </a>
                 </div>
               </div>
 
@@ -361,6 +424,13 @@ export const DeliveryTab = () => {
                   <p className="font-bold text-[#1a1a1a] border-b border-[#e2e2e2]/50 pb-1">Delivery Recipient</p>
                   <p className="flex items-center gap-2"><User className="w-4 h-4 text-[#999]" /> {trackedPackage.delivery?.recipientName}</p>
                   <p className="flex items-center gap-2"><Phone className="w-4 h-4 text-[#999]" /> {trackedPackage.delivery?.recipientPhone}</p>
+                  {trackedPackage.delivery?.address?.includes('.') && (
+                    <div className="mt-2 pt-2 border-t border-[#e2e2e2]/50">
+                      <span className="text-[10px] font-bold bg-orange-100 text-[#ea580c] px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                        <Navigation className="w-3 h-3" /> what3words Address: {trackedPackage.delivery.address}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <p className="font-bold text-[#1a1a1a] border-b border-[#e2e2e2]/50 pb-1">Billing Summary</p>

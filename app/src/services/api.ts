@@ -173,12 +173,32 @@ export const authApi = {
   async updateTransactionPin(data: { currentPin?: string; newPin: string }) {
     return httpClient.post('/auth/transaction-pin', data);
   },
+
+  async getTransactionPinStatus() {
+    return httpClient.get('/auth/transaction-pin/status');
+  },
+
+  async verifyTransactionPin(pin: string) {
+    return httpClient.post('/auth/transaction-pin/verify', { pin });
+  },
+
+  async requestPinReset() {
+    return httpClient.post('/auth/transaction-pin/reset-request', {});
+  },
+
+  async confirmPinReset(data: { otp: string; newPin: string }) {
+    return httpClient.post('/auth/transaction-pin/reset-confirm', data);
+  },
 };
 
 // Wallet API
 export const walletApi = {
   async getBalance() {
     return httpClient.get('/wallet/balance');
+  },
+
+  async getVirtualAccount() {
+    return httpClient.get('/wallet/virtual-account');
   },
 
   async getTransactions(params?: { page?: number; limit?: number; type?: string }) {
@@ -358,8 +378,9 @@ export const cryptoApi = {
     return httpClient.get('/crypto/prices');
   },
 
-  async getWalletAddress(crypto: string) {
-    return httpClient.get(`/crypto/wallet/${crypto}`);
+  async getWalletAddress(crypto: string, refresh?: boolean) {
+    const query = refresh ? '?refresh=true' : '';
+    return httpClient.get(`/crypto/wallet/${crypto}${query}`);
   },
 
   async buy(data: {
@@ -537,6 +558,14 @@ export const supportApi = {
   async searchFAQs(query: string) {
     return httpClient.get(`/support/faqs/search?q=${encodeURIComponent(query)}`);
   },
+
+  async getChatSession() {
+    return httpClient.get('/support/chat/session');
+  },
+
+  async sendChatMessage(data: { message: string; ticketId?: string }) {
+    return httpClient.post('/support/chat/send', data);
+  },
 };
 
 // Admin API (for admin dashboard)
@@ -559,14 +588,22 @@ export const adminApi = {
     return httpClient.post(`/admin/users/${id}/suspend`, { reason });
   },
 
+  async adjustUserWallet(id: string, data: { type: 'credit' | 'debit'; amount: number; reason: string }) {
+    return httpClient.post(`/admin/users/${id}/wallet-adjust`, data);
+  },
+
   // Transactions
-  async getTransactions(params?: { page?: number; limit?: number; status?: string; type?: string }) {
+  async getTransactions(params?: { page?: number; limit?: number; status?: string; type?: string; category?: string; search?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return httpClient.get(`/admin/transactions?${query}`);
   },
 
   async getTransaction(id: string) {
     return httpClient.get(`/admin/transactions/${id}`);
+  },
+
+  async updateTransactionStatus(id: string, data: { status: string; note?: string }) {
+    return httpClient.patch(`/admin/transactions/${id}/status`, data);
   },
 
   // Gift Cards
@@ -685,6 +722,12 @@ export const adminApi = {
     return httpClient.put('/admin/settings', data);
   },
 
+  // Export
+  getExportUrl(type: 'transactions' | 'users' | 'operations') {
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
+    return `${baseUrl}/admin/export?type=${type}`;
+  },
+
   // Analytics
   async getDashboardStats() {
     return httpClient.get('/admin/analytics/dashboard');
@@ -770,6 +813,16 @@ export class WebSocketService {
   }
 }
 
+export const driverApi = {
+  async getTasks() {
+    return httpClient.get('/logistics/driver/tasks');
+  },
+
+  async updateTask(id: string, data: { status: string; note?: string; proofUrl?: string; module?: 'logistics' | 'fuel' }) {
+    return httpClient.patch(`/logistics/driver/tasks/${id}`, data);
+  }
+};
+
 export const wsService = new WebSocketService();
 
 // Export all APIs
@@ -781,6 +834,7 @@ export const api = {
   crypto: cryptoApi,
   logistics: logisticsApi,
   fuel: fuelApi,
+  driver: driverApi,
   notifications: notificationsApi,
   support: supportApi,
   admin: adminApi,

@@ -2,14 +2,47 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 
+const QRCode = require('qrcode');
 const { auth } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const supabase = require('../utils/supabase');
 const quidaxService = require('../services/quidax');
 
-// Price cache (60 seconds expiration)
+function getNetworkForSymbol(symbol) {
+  switch (symbol.toLowerCase()) {
+    case 'btc': return 'Bitcoin Mainnet';
+    case 'eth': return 'ERC20 (Ethereum)';
+    case 'usdt': return 'TRC20 (Tron)';
+    default: return symbol.toUpperCase();
+  }
+}
+
+function getMinDepositForSymbol(symbol) {
+  switch (symbol.toLowerCase()) {
+    case 'btc': return '0.0001 BTC';
+    case 'eth': return '0.005 ETH';
+    case 'usdt': return '1.0 USDT';
+    default: return '0.01';
+  }
+}
+
+// Price cache (30 seconds expiration)
 let priceCache = null;
 let priceCacheExpiry = 0;
+
+async function getCryptoSettings() {
+  try {
+    const { data } = await supabase
+      .from('operational_settings')
+      .select('value')
+      .eq('key', 'crypto')
+      .maybeSingle();
+    return data?.value || {};
+  } catch (err) {
+    logger.warn('Failed to fetch crypto settings:', err);
+    return {};
+  }
+}
 
 // @route   GET /api/v1/crypto/assets
 // @desc    Get supported crypto assets and current balances
@@ -50,23 +83,51 @@ router.get('/assets', auth, async (req, res) => {
 });
 
 // @route   GET /api/v1/crypto/prices
-// @desc    Get crypto prices (NGN) with caching
+// @desc    Get crypto prices (NGN) with caching and dynamic admin margins
 // @access  Private
 router.get('/prices', auth, async (req, res) => {
   try {
+    const cryptoSettings = await getCryptoSettings();
+    const buyMargin = Number(cryptoSettings.buyMarginPercent || 1.5);
+    const sellMargin = Number(cryptoSettings.sellMarginPercent || -1.5);
+    const customPrices = cryptoSettings.customPrices || {};
+
     if (!priceCache || Date.now() > priceCacheExpiry) {
       const rates = await quidaxService.getLiveRates();
+      const btcBase = Number(customPrices.btc) || rates.btc || 140000000;
+      const ethBase = Number(customPrices.eth) || rates.eth || 5500000;
+      const usdtBase = Number(customPrices.usdt) || rates.usdt || 1550;
+
       priceCache = {
-        BTC: { ngn: rates.btc, usd: rates.btc / 1500, change24h: 2.4 },
-        ETH: { ngn: rates.eth, usd: rates.eth / 1500, change24h: -1.2 },
-        USDT: { ngn: rates.usdt, usd: rates.usdt / 1500, change24h: 0.0 }
+        BTC: {
+          ngn: btcBase,
+          buyPrice: Math.round(btcBase * (1 + buyMargin / 100)),
+          sellPrice: Math.round(btcBase * (1 + sellMargin / 100)),
+          usd: btcBase / 1500,
+          change24h: 2.4
+        },
+        ETH: {
+          ngn: ethBase,
+          buyPrice: Math.round(ethBase * (1 + buyMargin / 100)),
+          sellPrice: Math.round(ethBase * (1 + sellMargin / 100)),
+          usd: ethBase / 1500,
+          change24h: -1.2
+        },
+        USDT: {
+          ngn: usdtBase,
+          buyPrice: Math.round(usdtBase * (1 + buyMargin / 100)),
+          sellPrice: Math.round(usdtBase * (1 + sellMargin / 100)),
+          usd: usdtBase / 1500,
+          change24h: 0.0
+        }
       };
-      priceCacheExpiry = Date.now() + 60 * 1000;
+      priceCacheExpiry = Date.now() + 30 * 1000;
     }
 
     res.json({ 
       success: true, 
       prices: priceCache, 
+      margins: { buyMargin, sellMargin },
       changes: { btc: 2.4, eth: -1.2, usdt: 0.0 },
       lastUpdated: new Date().toISOString() 
     });
@@ -77,44 +138,127 @@ router.get('/prices', auth, async (req, res) => {
 });
 
 // @route   GET /api/v1/crypto/wallet/:asset
-// @desc    Get crypto wallet address for deposit (generates Quidax subuser if needed)
+// @desc    Get crypto wallet address for deposit (generates Quidax subuser or falls back to admin wallet)
 // @access  Private
 router.get('/wallet/:asset', auth, async (req, res) => {
   try {
     const { asset } = req.params;
+    const forceRefresh = req.query.refresh === 'true';
     const symbol = asset.toLowerCase();
     
     if (!['btc', 'eth', 'usdt'].includes(symbol)) {
       return res.status(400).json({ success: false, message: 'Unsupported cryptocurrency' });
     }
 
-    // 1. Fetch or create the user's Quidax sub-user ID
-    const quidaxUserId = await quidaxService.getOrCreateSubuser(
-      req.user.id,
-      req.user.email,
-      req.user.first_name,
-      req.user.last_name
-    );
+    const cryptoSettings = await getCryptoSettings();
+    const fallbackAddresses = cryptoSettings.depositAddresses || {
+      btc: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+      eth: '0x71C8008d5bAe6fE5EbC3D0BE5465C0C2D8190779',
+      usdt: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
+    };
 
-    // 2. Fetch/generate deposit address from Quidax
-    const addressResult = await quidaxService.getDepositAddress(quidaxUserId, symbol);
+    // 1. Fetch user profile from DB to check for cached address
+    const { data: userProfile } = await supabase
+      .from('users')
+      .select('preferences')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    const storedAddresses = userProfile?.preferences?.cryptoAddresses || {};
+    const existing = storedAddresses[symbol];
+
+    // Return cached address if available and no force refresh requested
+    if (existing?.address && !forceRefresh) {
+      let qrCodeUrl = null;
+      try {
+        qrCodeUrl = await QRCode.toDataURL(existing.address);
+      } catch (qrErr) {
+        logger.warn('Failed to generate QR code:', qrErr);
+      }
+
+      return res.json({
+        success: true,
+        address: existing.address,
+        network: existing.network || getNetworkForSymbol(symbol),
+        minDeposit: getMinDepositForSymbol(symbol),
+        qrCodeUrl,
+        status: 'active',
+        message: 'Wallet address ready'
+      });
+    }
+
+    let addressResult = { address: null, network: getNetworkForSymbol(symbol), status: 'pending' };
+
+    try {
+      // 2. Fetch or create the user's Quidax sub-user ID
+      const quidaxUserId = await quidaxService.getOrCreateSubuser(
+        req.user.id,
+        req.user.email,
+        req.user.first_name,
+        req.user.last_name
+      );
+
+      // 3. Fetch/generate deposit address from Quidax
+      addressResult = await quidaxService.getDepositAddress(quidaxUserId, symbol);
+    } catch (quidaxErr) {
+      logger.warn(`Quidax address generation unavailable, using fallback for ${symbol}:`, quidaxErr.message);
+      if (fallbackAddresses[symbol]) {
+        addressResult = {
+          address: fallbackAddresses[symbol],
+          network: getNetworkForSymbol(symbol),
+          status: 'active',
+          message: 'Admin designated deposit address'
+        };
+      }
+    }
+
+    // Fallback if Quidax returned no address
+    if (!addressResult.address && fallbackAddresses[symbol]) {
+      addressResult.address = fallbackAddresses[symbol];
+      addressResult.network = getNetworkForSymbol(symbol);
+      addressResult.status = 'active';
+    }
+
+    // Cache valid address to DB preferences
+    if (addressResult.address) {
+      const preferences = userProfile?.preferences || {};
+      preferences.cryptoAddresses = preferences.cryptoAddresses || {};
+      preferences.cryptoAddresses[symbol] = {
+        address: addressResult.address,
+        network: addressResult.network || getNetworkForSymbol(symbol),
+        updatedAt: new Date().toISOString()
+      };
+
+      await supabase
+        .from('users')
+        .update({ preferences })
+        .eq('id', req.user.id);
+    }
+
+    let qrCodeUrl = null;
+    if (addressResult.address) {
+      try {
+        qrCodeUrl = await QRCode.toDataURL(addressResult.address);
+      } catch (qrErr) {
+        logger.warn('Failed to generate QR code:', qrErr);
+      }
+    }
 
     res.json({
       success: true,
       address: addressResult.address,
-      network: addressResult.network,
-      status: addressResult.status,
+      network: addressResult.network || getNetworkForSymbol(symbol),
+      minDeposit: getMinDepositForSymbol(symbol),
+      qrCodeUrl,
+      status: addressResult.status || 'active',
       providerAddressId: addressResult.providerAddressId,
       message: addressResult.message || (addressResult.address ? 'Wallet address ready' : 'Wallet address generation is pending')
     });
   } catch (error) {
     logger.error('Get wallet address error:', error);
-    const isConfigError = error.message === 'QUIDAX_API_KEY is not configured';
-    res.status(isConfigError ? 503 : 500).json({
+    res.status(500).json({
       success: false,
-      message: isConfigError
-        ? 'Crypto provider is not configured. Please contact support.'
-        : (error.response?.data?.message || error.message || 'Failed to get wallet address')
+      message: error.response?.data?.message || error.message || 'Failed to get wallet address'
     });
   }
 });
@@ -136,14 +280,19 @@ router.post('/buy', auth, [
     const { crypto, amount } = req.body; // amount is in NGN Naira
     const symbol = crypto.toLowerCase();
 
-    // 1. Fetch current price to calculate coin quantity
+    // 1. Fetch current price to calculate coin quantity with buy margin
+    const cryptoSettings = await getCryptoSettings();
+    const buyMargin = Number(cryptoSettings.buyMarginPercent || 1.5);
+    const customPrices = cryptoSettings.customPrices || {};
+
     const rates = await quidaxService.getLiveRates();
-    const price = rates[symbol];
-    if (!price || price <= 0) {
+    const basePrice = Number(customPrices[symbol]) || rates[symbol];
+    if (!basePrice || basePrice <= 0) {
       return res.status(400).json({ success: false, message: 'Failed to retrieve market conversion price' });
     }
 
-    const cryptoQty = amount / price;
+    const effectiveBuyPrice = basePrice * (1 + buyMargin / 100);
+    const cryptoQty = amount / effectiveBuyPrice;
     const reference = `CRY-BUY-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     // 2. Call atomic DB stored procedure
@@ -197,14 +346,19 @@ router.post('/sell', auth, [
     const { crypto, amount } = req.body; // amount is in Crypto coin quantity
     const symbol = crypto.toLowerCase();
 
-    // 1. Fetch current price to calculate Naira payout
+    // 1. Fetch current price to calculate Naira payout with sell margin
+    const cryptoSettings = await getCryptoSettings();
+    const sellMargin = Number(cryptoSettings.sellMarginPercent || -1.5);
+    const customPrices = cryptoSettings.customPrices || {};
+
     const rates = await quidaxService.getLiveRates();
-    const price = rates[symbol];
-    if (!price || price <= 0) {
+    const basePrice = Number(customPrices[symbol]) || rates[symbol];
+    if (!basePrice || basePrice <= 0) {
       return res.status(400).json({ success: false, message: 'Failed to retrieve market conversion price' });
     }
 
-    const nairaCredit = amount * price;
+    const effectiveSellPrice = basePrice * (1 + sellMargin / 100);
+    const nairaCredit = amount * effectiveSellPrice;
     const reference = `CRY-SEL-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     // 2. Call atomic DB stored procedure

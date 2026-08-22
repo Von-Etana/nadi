@@ -605,6 +605,164 @@ router.post('/transaction-pin', auth, [
   }
 });
 
+// @route   GET /api/v1/auth/transaction-pin/status
+// @desc    Check if user has set a transaction PIN
+// @access  Private
+router.get('/transaction-pin/status', auth, async (req, res) => {
+  try {
+    const { data: profile } = await supabase
+      .from('users')
+      .select('transaction_pin')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    res.json({
+      success: true,
+      hasPin: Boolean(profile?.transaction_pin)
+    });
+  } catch (error) {
+    logger.error('Check transaction PIN status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to check PIN status' });
+  }
+});
+
+// @route   POST /api/v1/auth/transaction-pin/verify
+// @desc    Verify transaction PIN for sensitive operations
+// @access  Private
+router.post('/transaction-pin/verify', auth, [
+  body('pin').isLength({ min: 4, max: 4 }).matches(/^\d{4}$/).withMessage('PIN must be 4 digits')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { pin } = req.body;
+    const { data: profile } = await supabase
+      .from('users')
+      .select('transaction_pin')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    if (!profile || !profile.transaction_pin) {
+      return res.status(400).json({
+        success: false,
+        requiresPinSetup: true,
+        message: 'You must set up a transaction PIN first'
+      });
+    }
+
+    const isValid = await bcrypt.compare(pin, profile.transaction_pin);
+    if (!isValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid transaction PIN'
+      });
+    }
+
+    res.json({ success: true, message: 'PIN verified successfully' });
+  } catch (error) {
+    logger.error('Verify transaction PIN error:', error);
+    res.status(500).json({ success: false, message: 'Failed to verify PIN' });
+  }
+});
+
+// @route   POST /api/v1/auth/transaction-pin/reset-request
+// @desc    Request OTP to reset forgotten transaction PIN
+// @access  Private
+router.post('/transaction-pin/reset-request', auth, async (req, res) => {
+  try {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = Date.now() + 10 * 60 * 1000; // 10 mins
+
+    const { data: userProfile } = await supabase
+      .from('users')
+      .select('preferences, email, phone, first_name')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    const preferences = userProfile?.preferences || {};
+    preferences.security = preferences.security || {};
+    preferences.security.pinResetOtp = otp;
+    preferences.security.pinResetExpiry = expiry;
+
+    await supabase
+      .from('users')
+      .update({ preferences })
+      .eq('id', req.user.id);
+
+    // Send OTP via Email & SMS
+    await sendEmail({
+      to: req.user.email,
+      subject: 'Transaction PIN Reset OTP - Nadi Digital',
+      template: 'notification',
+      data: {
+        title: 'Transaction PIN Reset Request',
+        message: `Your one-time authorization code to reset your Nadi Transaction PIN is: ${otp}. Valid for 10 minutes. Do not share this code with anyone.`
+      }
+    }).catch(err => logger.warn('Failed to send PIN reset email:', err));
+
+    if (userProfile?.phone) {
+      await sendSMS({
+        to: userProfile.phone,
+        message: `Your Nadi Transaction PIN Reset code is: ${otp}. Valid for 10 mins.`
+      }).catch(err => logger.warn('Failed to send PIN reset SMS:', err));
+    }
+
+    res.json({ success: true, message: 'Reset code sent to your registered email and phone' });
+  } catch (error) {
+    logger.error('PIN reset request error:', error);
+    res.status(500).json({ success: false, message: 'Failed to initiate PIN reset' });
+  }
+});
+
+// @route   POST /api/v1/auth/transaction-pin/reset-confirm
+// @desc    Confirm OTP and set new transaction PIN
+// @access  Private
+router.post('/transaction-pin/reset-confirm', auth, [
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('Valid 6-digit OTP is required'),
+  body('newPin').isLength({ min: 4, max: 4 }).matches(/^\d{4}$/).withMessage('New PIN must be 4 digits')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { otp, newPin } = req.body;
+    const { data: userProfile } = await supabase
+      .from('users')
+      .select('preferences')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    const sec = userProfile?.preferences?.security;
+    if (!sec || sec.pinResetOtp !== otp || Date.now() > sec.pinResetExpiry) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired OTP code' });
+    }
+
+    const hashedPin = await bcrypt.hash(newPin, 12);
+    const preferences = userProfile?.preferences || {};
+    delete preferences.security.pinResetOtp;
+    delete preferences.security.pinResetExpiry;
+
+    await supabase
+      .from('users')
+      .update({
+        transaction_pin: hashedPin,
+        preferences,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.user.id);
+
+    res.json({ success: true, message: 'Transaction PIN has been reset successfully' });
+  } catch (error) {
+    logger.error('PIN reset confirm error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset PIN' });
+  }
+});
+
 // @route   POST /api/v1/auth/2fa/setup
 // @desc    Setup 2FA
 // @access  Private

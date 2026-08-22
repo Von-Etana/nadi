@@ -7,6 +7,7 @@ import {
   Eye, 
   EyeOff, 
   Check, 
+  Copy,
   ShieldCheck,
   RefreshCw,
   AlertCircle
@@ -72,6 +73,8 @@ export const WalletTab = ({
     { id: 'crypto', label: 'Crypto', icon: TrendingUp },
   ];
 
+  const [copiedVirtualAcc, setCopiedVirtualAcc] = useState(false);
+
   // Fetch balance, virtual accounts, and banks
   const fetchWalletDetails = async () => {
     try {
@@ -89,20 +92,20 @@ export const WalletTab = ({
     }
   };
 
+  const fetchVirtualAccount = async () => {
+    try {
+      const res = await walletApi.getVirtualAccount();
+      if (res.data && res.data.success && res.data.virtualAccount) {
+        setVirtualAccount(res.data.virtualAccount);
+      }
+    } catch (err: any) {
+      console.error('Failed to get virtual account:', err);
+    }
+  };
+
   useEffect(() => {
     fetchWalletDetails();
-    
-    // Load virtual accounts from local storage / context user profile
-    if (user?.wallet?.virtual_account) {
-      setVirtualAccount(user.wallet.virtual_account);
-    } else {
-      // Set a generic mock virtual account linked to the user's phone if none exists
-      setVirtualAccount({
-        bankName: 'Wema Bank',
-        accountNumber: user?.phone ? user.phone.replace(/[^0-9]/g, '').slice(-10) : '8123456789',
-        accountName: `${user?.firstName} ${user?.lastName} - Nadi`
-      });
-    }
+    fetchVirtualAccount();
 
     // Load banks
     const loadBanks = async () => {
@@ -418,35 +421,40 @@ export const WalletTab = ({
             <div className="bg-[#fcfcfc] border border-[#e2e2e2] rounded-2xl p-6 text-center space-y-4">
               <Building2 className="w-12 h-12 text-[#ea580c] mx-auto" />
               <div>
-                <p className="text-[#1a1a1a] font-bold">Direct Bank Transfer</p>
-                <p className="text-xs text-[#666] max-w-xs mx-auto">Transfer funds from any bank app to your Nadi dedicated account code to fund your wallet instantly.</p>
+                <p className="text-[#1a1a1a] font-bold text-base">Dedicated NGN Bank Account</p>
+                <p className="text-xs text-[#666] max-w-xs mx-auto mt-1">Transfer funds from any Nigerian bank app to this account. Your Nadi wallet will be credited instantly.</p>
               </div>
               {virtualAccount ? (
-                <div className="bg-white border border-[#e2e2e2] rounded-xl p-4 space-y-2 text-left shadow-sm">
-                  <div className="flex justify-between">
-                    <span className="text-xs text-[#666]">Bank Name</span>
-                    <span className="font-bold text-sm text-[#1a1a1a]">{virtualAccount.bankName}</span>
+                <div className="bg-white border border-[#e2e2e2] rounded-2xl p-5 space-y-3 text-left shadow-sm">
+                  <div className="flex justify-between items-center pb-2 border-b border-[#f0f0f0]">
+                    <span className="text-xs font-medium text-[#666]">Bank Name</span>
+                    <span className="font-bold text-sm text-[#1a1a1a] bg-orange-50 text-[#ea580c] px-2.5 py-0.5 rounded-full">{virtualAccount.bankName}</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-[#666]">Account Number</span>
-                    <span className="font-extrabold text-base text-[#ea580c] tracking-wider">{virtualAccount.accountNumber}</span>
+                  <div className="flex justify-between items-center py-1">
+                    <span className="text-xs font-medium text-[#666]">Account Number</span>
+                    <span className="font-black text-lg text-[#ea580c] tracking-widest font-mono">{virtualAccount.accountNumber}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-xs text-[#666]">Account Name</span>
-                    <span className="font-semibold text-xs text-[#1a1a1a] truncate max-w-[180px]">{virtualAccount.accountName}</span>
+                  <div className="flex justify-between items-center pt-2 border-t border-[#f0f0f0]">
+                    <span className="text-xs font-medium text-[#666]">Account Name</span>
+                    <span className="font-bold text-xs text-[#1a1a1a] truncate max-w-[200px]">{virtualAccount.accountName}</span>
                   </div>
                   <button 
                     onClick={() => {
                       navigator.clipboard.writeText(virtualAccount.accountNumber);
-                      alert('Account number copied!');
+                      setCopiedVirtualAcc(true);
+                      setTimeout(() => setCopiedVirtualAcc(false), 2500);
                     }}
-                    className="w-full mt-2 py-2 bg-gradient-primary text-white rounded-lg text-xs font-semibold hover:opacity-90 active:scale-[0.98] transition-all"
+                    className="w-full mt-3 py-3 bg-gradient-primary text-white rounded-xl text-xs font-bold hover:opacity-95 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-sm"
                   >
-                    Copy Account Number
+                    {copiedVirtualAcc ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    {copiedVirtualAcc ? 'Account Number Copied!' : 'Copy Account Number'}
                   </button>
                 </div>
               ) : (
-                <p className="text-sm text-red-500">Virtual account details not allocated.</p>
+                <div className="flex flex-col items-center gap-2 py-4">
+                  <RefreshCw className="w-6 h-6 text-[#ea580c] animate-spin" />
+                  <p className="text-xs text-[#666]">Generating your dedicated bank account...</p>
+                </div>
               )}
             </div>
           )}

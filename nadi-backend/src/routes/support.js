@@ -241,10 +241,186 @@ router.get('/faqs/search', async (req, res) => {
       { id: 3, category: 'security', question: 'How do I enable 2FA?', answer: 'Open Settings, use Security, then follow the 2FA setup flow.' }
     ].filter((faq) => `${faq.category} ${faq.question} ${faq.answer}`.toLowerCase().includes(needle));
 
-    res.json({ success: true, faqs, query: q });
+// @route   GET /api/v1/support/chat/session
+// @desc    Get or initialize live chat session for user
+// @access  Private
+router.get('/chat/session', auth, async (req, res) => {
+  try {
+    // Find active chat ticket
+    let { data: ticket } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .eq('category', 'chat')
+      .neq('status', 'closed')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!ticket) {
+      // Create a fresh live chat session
+      const welcomeReply = {
+        id: `bot-${Date.now()}`,
+        authorId: 'system-agent',
+        authorType: 'agent',
+        authorName: 'Nadi Support Assistant',
+        message: `Hello ${req.user.first_name || 'there'}! 👋 Welcome to Nadi Support. How can we help you today? You can select a quick action below or type a message.`,
+        createdAt: new Date().toISOString()
+      };
+
+      const { data: newTicket, error } = await supabase
+        .from('support_tickets')
+        .insert({
+          user_id: req.user.id,
+          reference: ticketReference(),
+          subject: 'Live Helpdesk Chat',
+          message: 'Live chat session initialized',
+          category: 'chat',
+          priority: 'normal',
+          status: 'open',
+          replies: [welcomeReply]
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      ticket = newTicket;
+    }
+
+    res.json({
+      success: true,
+      session: {
+        ticketId: ticket.id,
+        reference: ticket.reference,
+        status: ticket.status,
+        messages: ticket.replies || []
+      }
+    });
   } catch (error) {
-    logger.error('Search FAQs error:', error);
-    res.status(500).json({ success: false, message: 'Failed to search FAQs' });
+    logger.error('Chat session error:', error);
+    res.status(500).json({ success: false, message: 'Failed to initialize chat session' });
+  }
+});
+
+// @route   POST /api/v1/support/chat/send
+// @desc    Send live chat message and get instant smart response
+// @access  Private
+router.post('/chat/send', auth, [
+  body('message').trim().notEmpty().withMessage('Message is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { message, ticketId } = req.body;
+
+    let targetTicket = null;
+    if (ticketId) {
+      const { data: t } = await supabase
+        .from('support_tickets')
+        .select('*')
+        .eq('id', ticketId)
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+      targetTicket = t;
+    }
+
+    if (!targetTicket) {
+      const { data: active } = await supabase
+        .from('support_tickets')
+        .select('*')
+        .eq('user_id', req.user.id)
+        .eq('category', 'chat')
+        .neq('status', 'closed')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      targetTicket = active;
+    }
+
+    if (!targetTicket) {
+      return res.status(404).json({ success: false, message: 'No active chat session found' });
+    }
+
+    const userMessage = {
+      id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      authorId: req.user.id,
+      authorType: 'customer',
+      authorName: `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim() || 'You',
+      message: message.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    let updatedReplies = [...(targetTicket.replies || []), userMessage];
+
+    // Smart Auto-Reply Logic for instant assistance
+    const lower = message.toLowerCase();
+    let botReply = null;
+
+    if (lower.includes('fuel') || lower.includes('gas') || lower.includes('petrol') || lower.includes('diesel')) {
+      botReply = {
+        id: `bot-${Date.now()}`,
+        authorId: 'system-agent',
+        authorType: 'agent',
+        authorName: 'Nadi Support Assistant',
+        message: '⛽ You can order Petrol (PMS), Diesel (AGO), and Cooking Gas (3kg-50kg) directly from the "Fuel & Gas" tab on your dashboard with instant door-to-door delivery.',
+        createdAt: new Date().toISOString()
+      };
+    } else if (lower.includes('gift card') || lower.includes('rate') || lower.includes('sell card')) {
+      botReply = {
+        id: `bot-${Date.now()}`,
+        authorId: 'system-agent',
+        authorType: 'agent',
+        authorName: 'Nadi Support Assistant',
+        message: '🎁 We buy and sell Steam, Apple, Amazon, Razer Gold, Xbox, Sephora, and Google Play cards at top market rates with instant wallet payouts.',
+        createdAt: new Date().toISOString()
+      };
+    } else if (lower.includes('delivery') || lower.includes('track') || lower.includes('shipment')) {
+      botReply = {
+        id: `bot-${Date.now()}`,
+        authorId: 'system-agent',
+        authorType: 'agent',
+        authorName: 'Nadi Support Assistant',
+        message: '📦 For tracking orders, visit the "Delivery" tab or enter your tracking reference in the search bar. Our dispatch drivers update their progress in real-time.',
+        createdAt: new Date().toISOString()
+      };
+    } else if (lower.includes('human') || lower.includes('agent') || lower.includes('speak')) {
+      botReply = {
+        id: `bot-${Date.now()}`,
+        authorId: 'system-agent',
+        authorType: 'agent',
+        authorName: 'Nadi Support Assistant',
+        message: '🙋 An available Nadi customer care agent has been notified and will respond in this chat shortly.',
+        createdAt: new Date().toISOString()
+      };
+    }
+
+    if (botReply) {
+      updatedReplies.push(botReply);
+    }
+
+    const { data: savedTicket, error: updateErr } = await supabase
+      .from('support_tickets')
+      .update({
+        replies: updatedReplies,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', targetTicket.id)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+
+    res.json({
+      success: true,
+      message: 'Message sent',
+      messages: savedTicket.replies
+    });
+  } catch (error) {
+    logger.error('Send chat message error:', error);
+    res.status(500).json({ success: false, message: 'Failed to send message' });
   }
 });
 

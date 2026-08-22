@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
-import { httpClient } from '../services/api';
+import { httpClient, wsService } from '../services/api';
 
 // ==========================================
 // Types
@@ -218,6 +218,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
     };
   }, [fetchProfile, clearAuthState, clearAuthFromEvent]);
+
+  // Manage real-time WebSocket connection
+  useEffect(() => {
+    if (state.isAuthenticated && state.token) {
+      wsService.connect(state.token);
+    } else {
+      wsService.disconnect();
+    }
+    return () => {
+      wsService.disconnect();
+    };
+  }, [state.isAuthenticated, state.token]);
 
   const login = useCallback(async (email: string, password: string, twoFactorCode?: string) => {
     // CRITICAL: Clear any existing session before attempting login.

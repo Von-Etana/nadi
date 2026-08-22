@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   CheckCircle,
+  Coins,
+  CreditCard,
+  Download,
+  Eye,
   Fuel,
   Gift,
   Headphones,
@@ -14,6 +18,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Truck,
   Users,
   Wallet,
@@ -116,8 +121,11 @@ type TransactionRow = {
   type?: string;
   amount?: number;
   status?: string;
+  description?: string;
   created_at?: string;
   user?: UserSummary;
+  details?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 };
 type ReportGranularity = 'daily' | 'weekly' | 'monthly';
 type ReportPoint = {
@@ -191,6 +199,7 @@ const statusClass = (status?: string) => {
     case 'cancelled':
     case 'rejected':
     case 'failed':
+    case 'reversed':
     case 'urgent':
       return 'border-red-200 bg-red-50 text-red-700';
     default:
@@ -334,6 +343,17 @@ const initialGiftCardForm = {
   note: ''
 };
 
+const DEFAULT_GIFT_CARDS = [
+  { id: 'amazon', name: 'Amazon', currencies: ['USD', 'GBP', 'EUR'] },
+  { id: 'apple', name: 'Apple / iTunes', currencies: ['USD', 'GBP'] },
+  { id: 'google-play', name: 'Google Play', currencies: ['USD'] },
+  { id: 'steam', name: 'Steam', currencies: ['USD'] },
+  { id: 'xbox', name: 'Xbox', currencies: ['USD'] },
+  { id: 'playstation', name: 'PlayStation', currencies: ['USD'] },
+  { id: 'netflix', name: 'Netflix', currencies: ['USD'] },
+  { id: 'spotify', name: 'Spotify', currencies: ['USD'] }
+];
+
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
   const [loading, setLoading] = useState(true);
@@ -352,6 +372,10 @@ const AdminDashboard = () => {
   const [operationFilter, setOperationFilter] = useState<'all' | ManualModule>('all');
   const [supportFilter, setSupportFilter] = useState('all');
   const [userFilter, setUserFilter] = useState('all');
+  const [txCategoryFilter, setTxCategoryFilter] = useState('all');
+  const [txStatusFilter, setTxStatusFilter] = useState('all');
+
+  // Modals state
   const [selectedOrder, setSelectedOrder] = useState<OperationOrder | null>(null);
   const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(null);
   const [supportReply, setSupportReply] = useState('');
@@ -365,6 +389,24 @@ const AdminDashboard = () => {
   const [deliveryForm, setDeliveryForm] = useState(initialDeliveryForm);
   const [fuelForm, setFuelForm] = useState(initialFuelForm);
   const [giftCardForm, setGiftCardForm] = useState(initialGiftCardForm);
+
+  // User management & wallet adjustment modal
+  const [selectedUserForModal, setSelectedUserForModal] = useState<AdminUser | null>(null);
+  const [selectedUserDetail, setSelectedUserDetail] = useState<any>(null);
+  const [userModalLoading, setUserModalLoading] = useState(false);
+  const [walletAdjForm, setWalletAdjForm] = useState<{ type: 'credit' | 'debit'; amount: string; reason: string }>({
+    type: 'credit',
+    amount: '',
+    reason: ''
+  });
+
+  // Transaction detail & resolution modal
+  const [selectedTxForModal, setSelectedTxForModal] = useState<TransactionRow | null>(null);
+  const [txStatusUpdate, setTxStatusUpdate] = useState<{ status: string; note: string }>({
+    status: 'completed',
+    note: ''
+  });
+
   const { logout, user } = useAuth();
   const navigate = useNavigate();
 
@@ -399,10 +441,10 @@ const AdminDashboard = () => {
         adminApi.getOperationOrders(),
         adminApi.getGiftCardSales(),
         adminApi.getFuelOrders(),
-        adminApi.getUsers({ limit: 75 }),
-        adminApi.getTransactions({ limit: 75 }),
+        adminApi.getUsers({ limit: 100 }),
+        adminApi.getTransactions({ limit: 100 }),
         adminApi.getSettings(),
-        adminApi.getSupportTickets({ limit: 75 }),
+        adminApi.getSupportTickets({ limit: 100 }),
         adminApi.getReportsOverview({ days: 90 })
       ]);
 
@@ -470,6 +512,22 @@ const AdminDashboard = () => {
       row.kyc_status
     ].some((value) => String(value || '').toLowerCase().includes(searchText));
   }), [users, searchText, userFilter]);
+
+  const filteredTransactions = useMemo(() => transactions.filter((tx) => {
+    if (txCategoryFilter !== 'all' && tx.category !== txCategoryFilter) return false;
+    if (txStatusFilter !== 'all' && tx.status !== txStatusFilter) return false;
+    if (!searchText) return true;
+    return [
+      tx.reference,
+      tx.category,
+      tx.type,
+      tx.status,
+      tx.description,
+      userName(tx.user),
+      tx.user?.email,
+      tx.user?.phone
+    ].some((value) => String(value || '').toLowerCase().includes(searchText));
+  }), [transactions, txCategoryFilter, txStatusFilter, searchText]);
 
   const openSupportCount = supportTickets.filter((ticket) => ['open', 'in_progress', 'waiting_customer'].includes(ticket.status)).length;
   const pendingOpsCount = orders.filter((order) => ['pending', 'pending_review', 'accepted', 'dispatched', 'in_transit', 'open'].includes(order.status)).length;
@@ -606,6 +664,96 @@ const AdminDashboard = () => {
     }
   };
 
+  const openUserModal = async (row: AdminUser) => {
+    setSelectedUserForModal(row);
+    setSelectedUserDetail(null);
+    setWalletAdjForm({ type: 'credit', amount: '', reason: '' });
+    try {
+      setUserModalLoading(true);
+      const res = await adminApi.getUser(row.id);
+      if (res.data) {
+        setSelectedUserDetail(res.data);
+      }
+    } catch (err) {
+      toast.error('Failed to load user details');
+    } finally {
+      setUserModalLoading(false);
+    }
+  };
+
+  const handleWalletAdjustment = async () => {
+    if (!selectedUserForModal) return;
+    const amountNum = Number(walletAdjForm.amount);
+    if (!amountNum || amountNum <= 0) {
+      toast.error('Please enter a valid adjustment amount');
+      return;
+    }
+    if (!walletAdjForm.reason.trim()) {
+      toast.error('A reason for this adjustment is required');
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const res = await adminApi.adjustUserWallet(selectedUserForModal.id, {
+        type: walletAdjForm.type,
+        amount: amountNum,
+        reason: walletAdjForm.reason.trim()
+      });
+
+      if (res.data?.success) {
+        toast.success(`Wallet successfully ${walletAdjForm.type}ed: ₦${amountNum.toLocaleString()}`);
+        setWalletAdjForm({ type: 'credit', amount: '', reason: '' });
+        // Refresh details
+        const refreshed = await adminApi.getUser(selectedUserForModal.id);
+        setSelectedUserDetail(refreshed.data || null);
+        await loadAdminData();
+      } else {
+        toast.error(res.error || 'Wallet adjustment failed');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Wallet adjustment failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openTxModal = async (tx: TransactionRow) => {
+    setSelectedTxForModal(tx);
+    setTxStatusUpdate({ status: tx.status || 'completed', note: '' });
+    try {
+      const res = await adminApi.getTransaction(tx.id);
+      if (res.data?.transaction) {
+        setSelectedTxForModal(res.data.transaction);
+      }
+    } catch (err) {
+      console.error('Failed to fetch full transaction details:', err);
+    }
+  };
+
+  const handleTxStatusUpdate = async () => {
+    if (!selectedTxForModal) return;
+    try {
+      setActionLoading(true);
+      const res = await adminApi.updateTransactionStatus(selectedTxForModal.id, {
+        status: txStatusUpdate.status,
+        note: txStatusUpdate.note.trim() || undefined
+      });
+
+      if (res.data?.success) {
+        toast.success(`Transaction marked as ${txStatusUpdate.status}`);
+        setSelectedTxForModal(null);
+        await loadAdminData();
+      } else {
+        toast.error(res.error || 'Failed to update transaction status');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update transaction');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const updateSettingsPath = (section: string, value: unknown) => {
     setSettings((current) => ({ ...current, [section]: value }));
   };
@@ -621,6 +769,63 @@ const AdminDashboard = () => {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const exportCsv = (filename: string, rows: string[][]) => {
+    const content = rows.map((r) => r.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${filename}_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success(`${filename.replaceAll('_', ' ').toUpperCase()} exported successfully`);
+  };
+
+  const handleExportTransactions = () => {
+    const header = ['Reference', 'Customer Name', 'Customer Email', 'Category', 'Type', 'Amount (NGN)', 'Status', 'Date', 'Description'];
+    const body = filteredTransactions.map((tx) => [
+      tx.reference || tx.id,
+      userName(tx.user),
+      tx.user?.email || '',
+      tx.category || '',
+      tx.type || '',
+      String(tx.amount || 0),
+      tx.status || '',
+      tx.created_at || '',
+      tx.description || ''
+    ]);
+    exportCsv('nadi_transactions', [header, ...body]);
+  };
+
+  const handleExportUsers = () => {
+    const header = ['User ID', 'Name', 'Email', 'Phone', 'Role', 'KYC Status', 'Account Status', 'Date Joined'];
+    const body = filteredUsers.map((u) => [
+      u.id,
+      userName(u),
+      u.email || '',
+      u.phone || '',
+      u.role || 'user',
+      u.kyc_status || 'pending',
+      u.is_active ? 'Active' : 'Suspended',
+      u.created_at || ''
+    ]);
+    exportCsv('nadi_users', [header, ...body]);
+  };
+
+  const handleExportOperations = () => {
+    const header = ['Order ID', 'Module', 'Customer', 'Status', 'Total (NGN)', 'Date'];
+    const body = filteredOrders.map((o) => [
+      o.id,
+      o.module,
+      userName(o.user),
+      o.status,
+      String(o.amount || 0),
+      o.created_at || ''
+    ]);
+    exportCsv('nadi_operations', [header, ...body]);
   };
 
   const handleCreateDelivery = async () => {
@@ -740,6 +945,10 @@ const AdminDashboard = () => {
                 <SelectItem value="fuel">Fuel & Gas</SelectItem>
               </SelectContent>
             </Select>
+            <Button variant="outline" onClick={handleExportOperations}>
+              <Download className="h-4 w-4" />
+              Export CSV
+            </Button>
           </div>
         </CardHeader>
         <CardContent>{renderOperationsTable(filteredOrders.slice(0, activeTab === 'dashboard' ? 8 : filteredOrders.length))}</CardContent>
@@ -1172,9 +1381,9 @@ const AdminDashboard = () => {
               {activeTab === 'users' && (
                 <Card>
                   <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                    <CardTitle>Customer Control</CardTitle>
+                    <CardTitle>Customer Management & Wallets</CardTitle>
                     <div className="flex flex-col gap-2 sm:flex-row">
-                      <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search users" className="sm:w-72" />
+                      <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search customers by name, email, phone..." className="sm:w-72" />
                       <Select value={userFilter} onValueChange={setUserFilter}>
                         <SelectTrigger className="sm:w-44"><SelectValue /></SelectTrigger>
                         <SelectContent>
@@ -1184,15 +1393,34 @@ const AdminDashboard = () => {
                           <SelectItem value="kyc_pending">KYC pending</SelectItem>
                         </SelectContent>
                       </Select>
+                      <Button variant="outline" onClick={loadAdminData} disabled={loading}><RefreshCw className="h-4 w-4" />Refresh</Button>
+                      <Button variant="outline" onClick={handleExportUsers}><Download className="h-4 w-4" />Export CSV</Button>
                     </div>
                   </CardHeader>
                   <CardContent>
                     <Table>
-                      <TableHeader><TableRow><TableHead>User</TableHead><TableHead>Role</TableHead><TableHead>KYC</TableHead><TableHead>Status</TableHead><TableHead>Joined</TableHead><TableHead className="text-right">Controls</TableHead></TableRow></TableHeader>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Contact</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>KYC Status</TableHead>
+                          <TableHead>Account Status</TableHead>
+                          <TableHead>Joined</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
                       <TableBody>
                         {filteredUsers.map((row) => (
                           <TableRow key={row.id}>
-                            <TableCell><div className="font-semibold">{userName(row)}</div><div className="text-xs text-slate-500">{row.email}</div></TableCell>
+                            <TableCell>
+                              <div className="font-semibold text-slate-900">{userName(row)}</div>
+                              <div className="text-xs text-slate-500 font-mono">ID: {row.id.substring(0, 8)}...</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-sm">{row.email}</div>
+                              <div className="text-xs text-slate-500">{row.phone || 'No phone'}</div>
+                            </TableCell>
                             <TableCell><Badge className={statusClass(row.role)}>{row.role || 'user'}</Badge></TableCell>
                             <TableCell>
                               <Select value={row.kyc_status || 'pending'} onValueChange={(kycStatus) => handleUserUpdate(row, { kycStatus })}>
@@ -1205,15 +1433,20 @@ const AdminDashboard = () => {
                                 </SelectContent>
                               </Select>
                             </TableCell>
-                            <TableCell>{row.is_active ? 'Active' : 'Inactive'}</TableCell>
+                            <TableCell>
+                              <Badge className={row.is_active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}>
+                                {row.is_active ? 'Active' : 'Suspended'}
+                              </Badge>
+                            </TableCell>
                             <TableCell>{formatDate(row.created_at)}</TableCell>
                             <TableCell className="space-x-2 text-right">
+                              <Button size="sm" onClick={() => openUserModal(row)}>
+                                <Eye className="h-4 w-4" />
+                                Manage
+                              </Button>
                               <Button size="sm" variant={row.is_active ? 'destructive' : 'outline'} disabled={actionLoading} onClick={() => handleUserUpdate(row, { isActive: !row.is_active })}>
                                 {row.is_active ? 'Suspend' : 'Activate'}
                               </Button>
-                              {user?.role === 'super_admin' && row.role !== 'admin' && (
-                                <Button size="sm" variant="outline" disabled={actionLoading} onClick={() => handleUserUpdate(row, { role: 'admin' })}>Make Admin</Button>
-                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -1225,11 +1458,75 @@ const AdminDashboard = () => {
 
               {activeTab === 'transactions' && (
                 <Card>
-                  <CardHeader><CardTitle>Transactions</CardTitle></CardHeader>
+                  <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <CardTitle>Transactions & Settlements</CardTitle>
+                      <p className="text-xs text-slate-500 mt-1">Audit customer fundings, debits, orders, and settlements</p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search ref or description..." className="sm:w-60" />
+                      <Select value={txCategoryFilter} onValueChange={setTxCategoryFilter}>
+                        <SelectTrigger className="sm:w-36"><SelectValue placeholder="Category" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All categories</SelectItem>
+                          <SelectItem value="wallet">Wallet</SelectItem>
+                          <SelectItem value="crypto">Crypto</SelectItem>
+                          <SelectItem value="fuel">Fuel & Gas</SelectItem>
+                          <SelectItem value="logistics">Logistics</SelectItem>
+                          <SelectItem value="giftcard">Gift Cards</SelectItem>
+                          <SelectItem value="utility">Utilities</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select value={txStatusFilter} onValueChange={setTxStatusFilter}>
+                        <SelectTrigger className="sm:w-36"><SelectValue placeholder="Status" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All statuses</SelectItem>
+                          <SelectItem value="completed">Completed</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="failed">Failed</SelectItem>
+                          <SelectItem value="reversed">Reversed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button variant="outline" onClick={loadAdminData} disabled={loading}><RefreshCw className="h-4 w-4" />Refresh</Button>
+                      <Button variant="outline" onClick={handleExportTransactions}><Download className="h-4 w-4" />Export CSV</Button>
+                    </div>
+                  </CardHeader>
                   <CardContent>
                     <Table>
-                      <TableHeader><TableRow><TableHead>Reference</TableHead><TableHead>Customer</TableHead><TableHead>Category</TableHead><TableHead>Type</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                      <TableBody>{transactions.map((tx) => <TableRow key={tx.id}><TableCell className="font-mono text-xs">{tx.reference}</TableCell><TableCell>{userName(tx.user)}</TableCell><TableCell>{tx.category}</TableCell><TableCell>{tx.type}</TableCell><TableCell>{formatCurrency(tx.amount)}</TableCell><TableCell><Badge className={statusClass(tx.status)}>{tx.status}</Badge></TableCell></TableRow>)}</TableBody>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Reference</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead className="text-right">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredTransactions.map((tx) => (
+                          <TableRow key={tx.id}>
+                            <TableCell className="font-mono text-xs font-semibold">{tx.reference || tx.id}</TableCell>
+                            <TableCell>
+                              <div className="font-medium text-sm">{userName(tx.user)}</div>
+                              <div className="text-xs text-slate-500">{tx.user?.email}</div>
+                            </TableCell>
+                            <TableCell><Badge variant="outline" className="capitalize">{tx.category || 'General'}</Badge></TableCell>
+                            <TableCell className="capitalize text-xs text-slate-600">{tx.type?.replaceAll('_', ' ')}</TableCell>
+                            <TableCell className="font-semibold">{formatCurrency(tx.amount)}</TableCell>
+                            <TableCell><Badge className={statusClass(tx.status)}>{tx.status}</Badge></TableCell>
+                            <TableCell className="text-xs text-slate-500">{formatDate(tx.created_at)}</TableCell>
+                            <TableCell className="text-right">
+                              <Button size="sm" variant="outline" onClick={() => openTxModal(tx)}>
+                                <SlidersHorizontal className="h-4 w-4" />
+                                Inspect
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
                     </Table>
                   </CardContent>
                 </Card>
@@ -1328,21 +1625,274 @@ const AdminDashboard = () => {
               )}
 
               {activeTab === 'settings' && (
-                <div className="grid gap-4 xl:grid-cols-2">
+                <div className="space-y-6">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-xl font-black">Live Pricing & Platform Configuration</h3>
+                      <p className="text-sm text-slate-500">Edit prices, exchange rates, and system flags. Changes synchronize across the entire customer platform in real-time.</p>
+                    </div>
+                    <Button onClick={handleSettingsSave} disabled={actionLoading} className="bg-[#ea580c] hover:bg-[#c2410c] text-white">
+                      {actionLoading ? 'Saving...' : 'Save All Settings & Prices'}
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-6 xl:grid-cols-2">
+                    {/* Fuel Pricing */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Fuel className="h-5 w-5 text-[#ea580c]" />
+                          Fuel Pricing (NGN / Litre)
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="grid gap-4 sm:grid-cols-3">
+                        <div>
+                          <Label>Petrol (PMS) Price</Label>
+                          <Input
+                            type="number"
+                            value={settings.fuel?.fuel?.pms?.price ?? 617}
+                            onChange={(event) => updateSettingsPath('fuel', {
+                              ...(settings.fuel || {}),
+                              fuel: {
+                                ...(settings.fuel?.fuel || {}),
+                                pms: { ...(settings.fuel?.fuel?.pms || {}), price: Number(event.target.value), name: 'Premium Motor Spirit (Petrol)' }
+                              }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <Label>Diesel (AGO) Price</Label>
+                          <Input
+                            type="number"
+                            value={settings.fuel?.fuel?.ago?.price ?? 1100}
+                            onChange={(event) => updateSettingsPath('fuel', {
+                              ...(settings.fuel || {}),
+                              fuel: {
+                                ...(settings.fuel?.fuel || {}),
+                                ago: { ...(settings.fuel?.fuel?.ago || {}), price: Number(event.target.value), name: 'Automotive Gas Oil (Diesel)' }
+                              }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <Label>Fuel Delivery Fee</Label>
+                          <Input
+                            type="number"
+                            value={settings.fuel?.deliveryFee ?? 1500}
+                            onChange={(event) => updateSettingsPath('fuel', {
+                              ...(settings.fuel || {}),
+                              deliveryFee: Number(event.target.value)
+                            })}
+                          />
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Gas Cylinder Pricing */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Package className="h-5 w-5 text-[#ea580c]" />
+                          Cooking Gas (LPG) Refill Pricing (NGN)
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+                        {['3kg', '6kg', '12.5kg', '25kg', '50kg'].map((size) => (
+                          <div key={size}>
+                            <Label>{size} Refill</Label>
+                            <Input
+                              type="number"
+                              value={settings.fuel?.gas?.[size]?.price ?? (size === '3kg' ? 3500 : size === '6kg' ? 6500 : size === '12.5kg' ? 12500 : size === '25kg' ? 24000 : 47000)}
+                              onChange={(event) => updateSettingsPath('fuel', {
+                                ...(settings.fuel || {}),
+                                gas: {
+                                  ...(settings.fuel?.gas || {}),
+                                  [size]: { price: Number(event.target.value), name: `${size} Cylinder` }
+                                }
+                              })}
+                            />
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Gift Card Exchange Rates */}
                   <Card>
-                    <CardHeader><CardTitle>Fuel Pricing</CardTitle></CardHeader>
-                    <CardContent className="grid gap-3 md:grid-cols-2">
-                      <div><Label>PMS price</Label><Input type="number" value={settings.fuel?.fuel?.pms?.price || ''} onChange={(event) => updateSettingsPath('fuel', { ...(settings.fuel || {}), fuel: { ...(settings.fuel?.fuel || {}), pms: { ...(settings.fuel?.fuel?.pms || {}), price: Number(event.target.value) } } })} /></div>
-                      <div><Label>Diesel price</Label><Input type="number" value={settings.fuel?.fuel?.ago?.price || ''} onChange={(event) => updateSettingsPath('fuel', { ...(settings.fuel || {}), fuel: { ...(settings.fuel?.fuel || {}), ago: { ...(settings.fuel?.fuel?.ago || {}), price: Number(event.target.value) } } })} /></div>
-                      <div><Label>Delivery fee</Label><Input type="number" value={settings.fuel?.deliveryFee || ''} onChange={(event) => updateSettingsPath('fuel', { ...(settings.fuel || {}), deliveryFee: Number(event.target.value) })} /></div>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Gift className="h-5 w-5 text-[#ea580c]" />
+                        Gift Card Exchange Payout Rates (NGN per Currency Unit)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        {DEFAULT_GIFT_CARDS.map((card) => {
+                          const currentCardRates = settings.giftcards?.rates?.[card.id] || {};
+                          return (
+                            <div key={card.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 space-y-3">
+                              <div className="font-bold text-sm text-slate-800 flex items-center justify-between">
+                                <span>{card.name}</span>
+                                <Badge variant="outline" className="text-[10px] uppercase">{card.currencies.join('/')}</Badge>
+                              </div>
+                              <div className="space-y-2">
+                                {card.currencies.map((curr) => {
+                                  const fallbackVal = curr === 'GBP' ? 950 : curr === 'EUR' ? 890 : 850;
+                                  const rateVal = currentCardRates[curr] ?? fallbackVal;
+                                  return (
+                                    <div key={curr} className="flex items-center justify-between gap-2">
+                                      <Label className="text-xs font-semibold text-slate-600">{curr} Rate:</Label>
+                                      <div className="relative w-28">
+                                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">₦</span>
+                                        <Input
+                                          type="number"
+                                          value={rateVal}
+                                          className="h-8 pl-6 text-xs"
+                                          onChange={(event) => {
+                                            const updatedVal = Number(event.target.value);
+                                            const existingRates = settings.giftcards?.rates || {};
+                                            const existingBrandRates = existingRates[card.id] || {};
+                                            updateSettingsPath('giftcards', {
+                                              ...(settings.giftcards || {}),
+                                              rates: {
+                                                ...existingRates,
+                                                [card.id]: {
+                                                  ...existingBrandRates,
+                                                  [curr]: updatedVal
+                                                }
+                                              }
+                                            });
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </CardContent>
                   </Card>
+
+                  {/* Crypto Margins & Admin Wallets */}
                   <Card>
-                    <CardHeader><CardTitle>Platform Controls</CardTitle></CardHeader>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Coins className="h-5 w-5 text-[#ea580c]" />
+                        Crypto Dynamic Margins & Deposit Addresses
+                      </CardTitle>
+                    </CardHeader>
                     <CardContent className="space-y-4">
-                      <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3"><span><span className="block font-semibold">Registration enabled</span><span className="text-xs text-slate-500">Allow new accounts</span></span><Switch checked={settings.platform?.registrationEnabled !== false} onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), registrationEnabled: checked })} /></div>
-                      <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3"><span><span className="block font-semibold">Maintenance mode</span><span className="text-xs text-slate-500">Use during provider outages</span></span><Switch checked={settings.platform?.maintenanceMode === true} onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), maintenanceMode: checked })} /></div>
-                      <Button onClick={handleSettingsSave} disabled={actionLoading} className="w-full">{actionLoading ? 'Saving...' : 'Save Settings'}</Button>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <Label>Buy Margin % (Added to market price)</Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={settings.crypto?.buyMarginPercent ?? 1.5}
+                            onChange={(event) => updateSettingsPath('crypto', {
+                              ...(settings.crypto || {}),
+                              buyMarginPercent: Number(event.target.value)
+                            })}
+                          />
+                          <span className="text-[11px] text-slate-500">e.g. 1.5% profit on customer purchases</span>
+                        </div>
+                        <div>
+                          <Label>Sell Margin % (Subtracted from market price)</Label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={settings.crypto?.sellMarginPercent ?? -1.5}
+                            onChange={(event) => updateSettingsPath('crypto', {
+                              ...(settings.crypto || {}),
+                              sellMarginPercent: Number(event.target.value)
+                            })}
+                          />
+                          <span className="text-[11px] text-slate-500">e.g. -1.5% fee on customer sales</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 pt-2">
+                        <Label className="text-xs font-bold uppercase tracking-wider text-slate-600">Company Cold/Hot Deposit Addresses (Fallback / Manual)</Label>
+                        <div className="grid gap-3">
+                          <div>
+                            <Label className="text-xs">Bitcoin (BTC) Deposit Address</Label>
+                            <Input
+                              className="font-mono text-xs"
+                              value={settings.crypto?.depositAddresses?.btc ?? 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh'}
+                              onChange={(event) => updateSettingsPath('crypto', {
+                                ...(settings.crypto || {}),
+                                depositAddresses: {
+                                  ...(settings.crypto?.depositAddresses || {}),
+                                  btc: event.target.value
+                                }
+                              })}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Ethereum (ETH / ERC-20) Deposit Address</Label>
+                            <Input
+                              className="font-mono text-xs"
+                              value={settings.crypto?.depositAddresses?.eth ?? '0x71C8008d5bAe6fE5EbC3D0BE5465C0C2D8190779'}
+                              onChange={(event) => updateSettingsPath('crypto', {
+                                ...(settings.crypto || {}),
+                                depositAddresses: {
+                                  ...(settings.crypto?.depositAddresses || {}),
+                                  eth: event.target.value
+                                }
+                              })}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Tether (USDT TRC-20) Deposit Address</Label>
+                            <Input
+                              className="font-mono text-xs"
+                              value={settings.crypto?.depositAddresses?.usdt ?? 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'}
+                              onChange={(event) => updateSettingsPath('crypto', {
+                                ...(settings.crypto || {}),
+                                depositAddresses: {
+                                  ...(settings.crypto?.depositAddresses || {}),
+                                  usdt: event.target.value
+                                }
+                              })}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Platform Controls */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Settings className="h-5 w-5 text-[#ea580c]" />
+                        Platform Controls & Guardrails
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-6 md:grid-cols-2">
+                      <div className="flex items-center justify-between rounded-lg border border-slate-200 p-4">
+                        <div>
+                          <p className="font-semibold text-sm">Customer Registration</p>
+                          <p className="text-xs text-slate-500">Allow new users to sign up on the platform</p>
+                        </div>
+                        <Switch
+                          checked={settings.platform?.registrationEnabled !== false}
+                          onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), registrationEnabled: checked })}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg border border-slate-200 p-4">
+                        <div>
+                          <p className="font-semibold text-sm">Maintenance Mode</p>
+                          <p className="text-xs text-slate-500">Restrict customer platform during provider maintenance</p>
+                        </div>
+                        <Switch
+                          checked={settings.platform?.maintenanceMode === true}
+                          onCheckedChange={(checked) => updateSettingsPath('platform', { ...(settings.platform || {}), maintenanceMode: checked })}
+                        />
+                      </div>
                     </CardContent>
                   </Card>
                 </div>
@@ -1351,6 +1901,264 @@ const AdminDashboard = () => {
           )}
         </section>
       </main>
+
+      {/* User Details & Wallet Control Modal */}
+      <Dialog open={!!selectedUserForModal} onOpenChange={(open) => !open && setSelectedUserForModal(null)}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Customer Profile & Wallet Control</span>
+              {selectedUserForModal && (
+                <Badge className={statusClass(selectedUserForModal.kyc_status)}>
+                  KYC: {selectedUserForModal.kyc_status?.toUpperCase() || 'PENDING'}
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedUserForModal ? `${userName(selectedUserForModal)} · ${selectedUserForModal.email}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+
+          {userModalLoading ? (
+            <div className="py-12 flex justify-center"><Loader2 className="h-8 w-8 animate-spin text-[#ea580c]" /></div>
+          ) : selectedUserForModal && (
+            <div className="space-y-6">
+              {/* User Overview Stats */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500 font-semibold">Wallet Balance</p>
+                  <p className="text-2xl font-black text-emerald-600 mt-1">
+                    {formatCurrency(Number(selectedUserDetail?.wallet?.balance || 0))}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Account: {selectedUserDetail?.wallet?.account_number || 'Virtual pending'}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500 font-semibold">Phone & Account Type</p>
+                  <p className="text-sm font-bold text-slate-800 mt-1">{selectedUserForModal.phone || 'No phone'}</p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Role: {selectedUserForModal.role || 'user'}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs text-slate-500 font-semibold">Status</p>
+                  <p className={`text-sm font-bold mt-1 ${selectedUserForModal.is_active ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {selectedUserForModal.is_active ? 'Active Customer' : 'Suspended Account'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Joined: {formatDate(selectedUserForModal.created_at)}</p>
+                </div>
+              </div>
+
+              {/* Manual Wallet Adjustment Console */}
+              <Card className="border-orange-200 bg-orange-50/20">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-[#ea580c]" />
+                    Manual Wallet Balance Adjustment
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 pt-0">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <Label>Adjustment Type</Label>
+                      <Select
+                        value={walletAdjForm.type}
+                        onValueChange={(type: 'credit' | 'debit') => setWalletAdjForm(prev => ({ ...prev, type }))}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="credit">Credit Balance (+)</SelectItem>
+                          <SelectItem value="debit">Debit Balance (-)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Amount (NGN)</Label>
+                      <Input
+                        type="number"
+                        placeholder="e.g. 5000"
+                        value={walletAdjForm.amount}
+                        onChange={(e) => setWalletAdjForm(prev => ({ ...prev, amount: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label>Reason / Note</Label>
+                      <Input
+                        placeholder="Reason for adjustment"
+                        value={walletAdjForm.reason}
+                        onChange={(e) => setWalletAdjForm(prev => ({ ...prev, reason: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    disabled={actionLoading || !walletAdjForm.amount || !walletAdjForm.reason}
+                    onClick={handleWalletAdjustment}
+                    className="bg-[#ea580c] hover:bg-[#c2410c] text-white"
+                  >
+                    {actionLoading ? 'Processing...' : `Apply ${walletAdjForm.type.toUpperCase()} Adjustment`}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Quick KYC Controls */}
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border border-slate-200 bg-white">
+                <div>
+                  <p className="font-bold text-sm">KYC Verification Controls</p>
+                  <p className="text-xs text-slate-500">Update verification status and alert customer</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-emerald-700 hover:bg-emerald-50"
+                    disabled={actionLoading || selectedUserForModal.kyc_status === 'verified'}
+                    onClick={() => handleUserUpdate(selectedUserForModal, { kycStatus: 'verified' })}
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                    Verify KYC
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-red-700 hover:bg-red-50"
+                    disabled={actionLoading || selectedUserForModal.kyc_status === 'rejected'}
+                    onClick={() => handleUserUpdate(selectedUserForModal, { kycStatus: 'rejected' })}
+                  >
+                    <XCircle className="h-4 w-4" />
+                    Reject KYC
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={selectedUserForModal.is_active ? 'destructive' : 'outline'}
+                    disabled={actionLoading}
+                    onClick={() => handleUserUpdate(selectedUserForModal, { isActive: !selectedUserForModal.is_active })}
+                  >
+                    {selectedUserForModal.is_active ? 'Suspend Account' : 'Activate Account'}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Recent Activity for this User */}
+              <div>
+                <h4 className="font-bold text-sm text-slate-900 mb-2">Recent Customer Transactions</h4>
+                {selectedUserDetail?.recentTransactions?.length ? (
+                  <div className="rounded-lg border border-slate-200 overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Reference</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Date</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedUserDetail.recentTransactions.map((tx: any) => (
+                          <TableRow key={tx.id}>
+                            <TableCell className="font-mono text-xs">{tx.reference || tx.id}</TableCell>
+                            <TableCell className="capitalize text-xs">{tx.type?.replaceAll('_', ' ')}</TableCell>
+                            <TableCell className="font-semibold text-xs">{formatCurrency(tx.amount)}</TableCell>
+                            <TableCell><Badge className={statusClass(tx.status)}>{tx.status}</Badge></TableCell>
+                            <TableCell className="text-xs text-slate-500">{formatDate(tx.created_at)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 py-3 text-center border border-dashed rounded-lg">No recent transactions recorded for this customer.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Transaction Detail & Resolution Modal */}
+      <Dialog open={!!selectedTxForModal} onOpenChange={(open) => !open && setSelectedTxForModal(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Transaction Settlement Inspector</span>
+              {selectedTxForModal && <Badge className={statusClass(selectedTxForModal.status)}>{selectedTxForModal.status}</Badge>}
+            </DialogTitle>
+            <DialogDescription>
+              Reference: <span className="font-mono">{selectedTxForModal?.reference || selectedTxForModal?.id}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedTxForModal && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2 p-4 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                <div>
+                  <p className="text-xs text-slate-500">Customer</p>
+                  <p className="font-semibold">{userName(selectedTxForModal.user)}</p>
+                  <p className="text-xs text-slate-500">{selectedTxForModal.user?.email}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Amount & Category</p>
+                  <p className="font-black text-lg text-slate-900">{formatCurrency(selectedTxForModal.amount)}</p>
+                  <p className="text-xs text-slate-500 capitalize">{selectedTxForModal.category || 'General'} · {selectedTxForModal.type}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Created At</p>
+                  <p className="font-medium text-xs">{formatDate(selectedTxForModal.created_at)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Description</p>
+                  <p className="text-xs text-slate-700">{selectedTxForModal.description || 'No description'}</p>
+                </div>
+              </div>
+
+              {/* Status Update / Resolution Form */}
+              <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+                <Label className="font-bold text-sm">Resolution & Status Override</Label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label className="text-xs">Update Status To</Label>
+                    <Select
+                      value={txStatusUpdate.status}
+                      onValueChange={(status) => setTxStatusUpdate(prev => ({ ...prev, status }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="completed">Completed</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="failed">Failed</SelectItem>
+                        <SelectItem value="reversed">Reversed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Audit Note / Reason</Label>
+                    <Input
+                      placeholder="Reason for manual resolution"
+                      value={txStatusUpdate.note}
+                      onChange={(e) => setTxStatusUpdate(prev => ({ ...prev, note: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <Button
+                  onClick={handleTxStatusUpdate}
+                  disabled={actionLoading}
+                  className="w-full bg-[#ea580c] hover:bg-[#c2410c] text-white"
+                >
+                  {actionLoading ? 'Updating...' : `Update Transaction Status to ${txStatusUpdate.status.toUpperCase()}`}
+                </Button>
+              </div>
+
+              {/* Raw Details / Metadata */}
+              {(selectedTxForModal.details || selectedTxForModal.metadata) && (
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-slate-600">Technical Details & Metadata</p>
+                  <pre className="max-h-40 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-50">
+                    {JSON.stringify(selectedTxForModal.details || selectedTxForModal.metadata, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!createDialog} onOpenChange={(open) => !open && setCreateDialog(null)}>
         <DialogContent className="max-w-2xl">
